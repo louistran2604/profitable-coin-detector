@@ -1,0 +1,6 @@
+.env
+*.log
+.n8n/
+n8n-coin-detector-*.tgz
+
+.omx/

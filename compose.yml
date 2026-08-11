@@ -1,0 +1,22 @@
+services:
+  n8n-coin-detector:
+    image: docker.n8n.io/n8nio/n8n:2.30.5
+    container_name: n8n-coin-detector
+    ports:
+      - "127.0.0.1:6789:5678"
+    environment:
+      GENERIC_TIMEZONE: Asia/Ho_Chi_Minh
+      TZ: Asia/Ho_Chi_Minh
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-}
+      ELECTRICITY_PRICE_PER_KWH: ${ELECTRICITY_PRICE_PER_KWH:-0.10}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      NODE_FUNCTION_ALLOW_BUILTIN: fs,path
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: false
+      N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
+    volumes:
+      - n8n_coin_detector_data:/home/node/.n8n
+    restart: unless-stopped
+
+volumes:
+  n8n_coin_detector_data:
+    name: n8n-coin-detector-data
