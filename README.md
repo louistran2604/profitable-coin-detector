@@ -103,6 +103,4 @@ State is written atomically to `/home/node/.n8n/coin-detector-state.json` in the
 
 ## Security
 
-- Never commit `.env` or paste webhook and encryption-key values into issues or logs.
-- n8n binds to `127.0.0.1`, not the public network.
 - Keep the same `N8N_ENCRYPTION_KEY` when restoring n8n data.
