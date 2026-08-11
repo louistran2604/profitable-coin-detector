@@ -90,9 +90,13 @@ test('stages an efficient-alternative event and includes the raw leader in the d
   ]);
   const result = run(html);
   assert.ok(result.events.some((item) => item.type === 'efficient_alternative'));
+  assert.match(result.pendingDiscordAlert.payload.content, /^Fetched: 2026-08-10 08:15 ICT profitable coins digest/);
+  assert.match(result.pendingDiscordAlert.payload.content, /Electricity rate: \$0\.10\/kWh/);
+  assert.match(result.pendingDiscordAlert.payload.content, /Efficiency: \$0\.47 net profit\/kWh/);
+  assert.doesNotMatch(result.pendingDiscordAlert.payload.content, /Events:/);
   assert.match(result.pendingDiscordAlert.payload.content, /Raw-profit leader: Alpha Coin/);
   assert.match(result.pendingDiscordAlert.payload.content, /Source: https:\/\/www\.hashrate\.no\/gpus\/5060ti\//);
-  assert.match(result.pendingDiscordAlert.payload.content, /Fetched: .* ICT/);
+  assert.doesNotMatch(result.pendingDiscordAlert.payload.content, /\nFetched:/);
   const unchanged = run(html, send(result), '2026-08-11T01:15:00.000Z');
   assert.deepEqual(unchanged.events, []);
   assert.equal(unchanged.nextState.pendingDiscordAlert, null);

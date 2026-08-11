@@ -506,21 +506,21 @@ function formatIct(timestamp) {
 }
 
 function coinLine(coin) {
-  return `${coin.rank}. ${coin.coin} (${coin.ticker}/${coin.algorithm}) ${formatUsd(coin.netProfit)} net | ${coin.powerW}W | ${formatUsd(coin.profitPerKwh)}/kWh`;
+  return `${coin.rank}. ${coin.coin} (${coin.ticker}/${coin.algorithm}) | Net profit: ${formatUsd(coin.netProfit)}/day | Power: ${coin.powerW}W | Efficiency: ${formatUsd(coin.profitPerKwh)} net profit/kWh`;
 }
 
 function buildDiscordPayload(rankedResult, events, electricityRate, source, fetchedAt) {
   const top = rankedResult.ranked.slice(0, 3);
   const rawLeader = rankedResult.rawLeader;
   const lines = [
-    `${EXPECTED_GPU} profitability digest`,
-    `Electricity: ${formatUsd(electricityRate)}/kWh`,
-    `Events: ${events.map((item) => item.type).join(', ') || 'none'}`,
+    `Fetched: ${formatIct(fetchedAt)} profitable coins digest`,
+    `GPU: ${EXPECTED_GPU}`,
+    `Electricity rate: ${formatUsd(electricityRate)}/kWh`,
     '',
     ...top.map(coinLine),
   ];
-  if (rawLeader && (!top[0] || rawLeader.key !== top[0].key)) lines.push(`Raw-profit leader: ${rawLeader.coin} (${rawLeader.ticker}/${rawLeader.algorithm}) ${formatUsd(rawLeader.netProfit)} net | ${rawLeader.powerW}W`);
-  lines.push('', `Source: ${source}`, `Fetched: ${formatIct(fetchedAt)}`);
+  if (rawLeader && (!top[0] || rawLeader.key !== top[0].key)) lines.push(`Raw-profit leader: ${rawLeader.coin} (${rawLeader.ticker}/${rawLeader.algorithm}) | Net profit: ${formatUsd(rawLeader.netProfit)}/day | Power: ${rawLeader.powerW}W`);
+  lines.push('', `Source: ${source}`);
   return {
     content: lines.join('\n'),
     allowed_mentions: { parse: [] },
