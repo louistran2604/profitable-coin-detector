@@ -1,106 +1,131 @@
 # n8n Coin Profitability Detector
 
-A Dockerized [n8n](https://n8n.io/) workflow that checks daily mining estimates for the **NVIDIA GeForce RTX 5060 Ti 16GB**, ranks opportunities by net profit and electricity efficiency, and sends meaningful changes to Discord.
+A Dockerized [n8n](https://n8n.io/) workflow that checks [Hashrate.no](https://hashrate.no/) once per day, ranks mining opportunities for configured hardware, and sends one concise Discord digest per successful device.
 
 ## Features
 
-- Uses the exact RTX 5060 Ti 16GB estimate page from [Hashrate.no](https://www.hashrate.no/gpus/5060ti/).
-- Makes one logical source request per daily evaluation, with limited retries only after failures.
+- Supports multiple Hashrate.no GPU and CPU pages.
+- Hardware is configured in [`config/hardware.json`](config/hardware.json) with a readable name and page URL.
+- Makes one Hashrate.no GET request per configured device per daily run, with one limited retry after a failure.
 - Separates revenue, electricity cost, and net profit.
-- Prefers lower-power options when their profit is reasonably close to the highest-profit option.
-- Prioritizes opportunities at or above `$1.25/day` without allowing low-profit efficiency outliers to dominate.
-- Rejects malformed, incomplete, stale, duplicate, and suspiciously extreme data.
-- Avoids repeated Discord alerts when rankings have not changed meaningfully.
-- Stores workflow history and detector state in a persistent Docker volume.
+- Prefers lower-power opportunities when net profit is reasonably close.
+- Sends a digest every day for each successfully parsed device. There is no `$1.25/day` alert gate.
+- Continues processing other devices when one page fails.
+- Persists per-device snapshots and Discord delivery status in Docker storage.
+- Keeps Discord credentials in `.env`, which is ignored by Git.
+
+## Quick start
+
+```bash
+cp .env.example .env
+node scripts/validate-hardware-config.js
+docker compose up -d
+```
+
+Set `ELECTRICITY_PRICE_PER_KWH`, `DISCORD_WEBHOOK_URL`, and a stable random `N8N_ENCRYPTION_KEY` in `.env` before starting. Then open [http://localhost:6789](http://localhost:6789), complete n8n's owner setup, import [`workflows/coin-profitability-detector.json`](workflows/coin-profitability-detector.json), and activate it.
+
+The schedule is `00:00` in `Asia/Ho_Chi_Minh` (`GMT+7`). Full setup instructions are in [`docs/SETUP.md`](docs/SETUP.md).
+
+## Add or change hardware
+
+Edit [`config/hardware.json`](config/hardware.json):
+
+```json
+{
+  "hardware": [
+    {
+      "name": "NVIDIA RTX 5060 Ti 16GB",
+      "url": "https://www.hashrate.no/gpus/5060ti/"
+    },
+    {
+      "name": "AMD Ryzen 9 7900X",
+      "url": "https://www.hashrate.no/cpus/7900x/"
+    }
+  ]
+}
+```
+
+The name must match the hardware name shown by the Hashrate.no page. Only HTTPS URLs on `hashrate.no` using `/gpus/<slug>/` or `/cpus/<slug>/` are accepted.
+
+Validate the file:
+
+```bash
+node scripts/validate-hardware-config.js
+```
+
+The configuration is read from the mounted file at every workflow run. A JSON-only change does not require workflow re-import; after validation, run the workflow manually once and leave it active for the next midnight run. For workflow-code changes, regenerate and update the stored workflow as described in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ## Workflow
 
 ```text
 Daily 00:00 ICT
       ↓
-Fetch RTX 5060 Ti estimates
+Load config/hardware.json
       ↓
-Validate and normalize
+Fetch one page per device
+      ↓
+Validate and normalize each response
       ↓
 Calculate net profit and efficiency
       ↓
-Reject suspicious data
+Rank each device independently
       ↓
-Rank opportunities
+Post one Discord digest per successful device
       ↓
-Compare with previous state
-      ↓
-Discord alert when worthwhile
-      ↓
-Save state
+Save per-device state
 ```
 
-The schedule uses `Asia/Ho_Chi_Minh` and runs at `00:00` each day. n8n is available only from the local machine at <http://localhost:6789>.
+If one device fails, its error is stored and its last good snapshot is preserved. Other configured devices can still produce Discord digests.
 
-## Quick start
+## Electricity and ranking
 
-```sh
-cp .env.example .env
-docker compose up -d
-```
-
-Before starting, replace `N8N_ENCRYPTION_KEY` in `.env` with a stable random value. Add `DISCORD_WEBHOOK_URL` to enable Discord notifications, then keep `.env` private.
-
-Open <http://localhost:6789>, complete the initial n8n account setup, import [`workflows/coin-profitability-detector.json`](workflows/coin-profitability-detector.json), and activate the workflow.
-
-For complete instructions, see:
-
-- [Setup and Discord configuration](docs/SETUP.md)
-- [Operations, testing, backup, and restore](docs/OPERATIONS.md)
-
-## Configuration
-
-| Variable | Purpose | Example |
-| --- | --- | --- |
-| `N8N_ENCRYPTION_KEY` | Protects encrypted n8n data and must remain stable across restores. | A long random value |
-| `ELECTRICITY_PRICE_PER_KWH` | Electricity price in USD per kWh used for net-profit calculations. | `0.10` |
-| `DISCORD_WEBHOOK_URL` | Discord webhook used for alerts. Leave blank to disable delivery safely. | Set only in `.env` |
-
-## Profitability and ranking
-
-For electricity rate `r` in USD/kWh:
+The source's rolling `Rev. 24h` value is treated as revenue. Hashrate.no's displayed profit is not used because this project recalculates electricity cost using the configured rate:
 
 ```text
 energy_kWh/day = power_W × 24 ÷ 1000
-electricity_cost/day = energy_kWh/day × r
+electricity_cost/day = energy_kWh/day × ELECTRICITY_PRICE_PER_KWH
 net_profit/day = revenue_24h − electricity_cost/day
 profit_per_watt = net_profit/day ÷ power_W
+profit_per_kWh = net_profit/day ÷ energy_kWh/day
 ```
 
-The detector first identifies the highest raw net profit. Opportunities within `$0.10/day` of it form a competitive group, where additional power consumption receives a transparent score penalty. This normally ranks `$1.35/day @ 120W` above `$1.40/day @ 200W`, while a major profit advantage such as `$2.00/day @ 200W` still beats `$1.20/day @ 100W`.
+Coins within `$0.10/day` of the highest net profit are treated as competitive. Extra power receives a transparent score penalty, so a slightly lower-profit, much more efficient coin can rank first. A large profit advantage still wins over efficiency alone.
 
-The source's rolling `Rev. 24h` value is treated as revenue. Hashrate.no's displayed profit is ignored because electricity cost is recalculated using this project's configured rate.
+## Common commands
 
-## Reliability and state
+Run these from the repository root:
 
-The workflow validates exact GPU identity, numeric fields, power limits, revenue limits, response size, stale snapshots, sudden spikes, and parser-collapse conditions before ranking data. A source or parsing failure preserves the previous successful state.
+```bash
+docker compose up -d                         # start
+docker compose stop                          # stop
+docker compose restart                       # restart
+docker compose logs -f n8n-coin-detector     # logs
+docker compose pull n8n-coin-detector && docker compose up -d n8n-coin-detector  # update
+```
 
-State is written atomically to `/home/node/.n8n/coin-detector-state.json` in the `n8n-coin-detector-data` Docker volume. Failed Discord deliveries remain pending and are not marked as sent.
+Backup and restore commands are in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+## Data source and limits
+
+No Hashrate.no API key is required. The workflow uses the structured HTML estimate pages directly and validates the configured hardware title before parsing rows. Mining estimates change with coin prices, network difficulty, pool conditions, and miner software; the digest is informational.
 
 ## Repository structure
 
 ```text
 .
 ├── compose.yml
-├── .env.example
-├── docs/
+├── config/hardware.json
+├── docs/SETUP.md
+├── docs/OPERATIONS.md
 ├── scripts/build-workflow.js
+├── scripts/validate-hardware-config.js
 ├── src/coin-detector-core.js
 ├── tests/coin-detector-core.test.js
 └── workflows/coin-profitability-detector.json
 ```
 
-## Data-source limitations
-
-- Hashrate.no does not provide a reliable timestamp for every estimate, so the workflow records its own fetch time and treats unchanged snapshots as stale after 48 hours.
-- Mining estimates can change quickly with coin prices, network difficulty, pool conditions, and miner software.
-- Profitability estimates are informational and do not guarantee actual earnings.
-
 ## Security
 
-- Keep the same `N8N_ENCRYPTION_KEY` when restoring n8n data.
+- Never commit `.env` or paste its contents into chat.
+- Keep `N8N_ENCRYPTION_KEY` stable across restarts and restores.
+- Backups contain encrypted n8n credentials and must be stored privately.

@@ -1,18 +1,16 @@
 'use strict';
 
-const SOURCE_URL = 'https://www.hashrate.no/gpus/5060ti/';
-const EXPECTED_GPU = 'NVIDIA RTX 5060 Ti 16GB';
+const DEFAULT_HARDWARE = Object.freeze({
+  name: 'NVIDIA RTX 5060 Ti 16GB',
+  url: 'https://www.hashrate.no/gpus/5060ti/',
+  type: 'gpu',
+  slug: '5060ti',
+  key: 'gpu:5060ti',
+});
 const ICT_TIMEZONE = 'Asia/Ho_Chi_Minh';
-const ALERT_THRESHOLD_USD = 1.25;
-const COMPETITIVE_GAP_USD = 0.10;
-const STALE_AFTER_MS = 48 * 60 * 60 * 1000;
 const MAX_POWER_W = 400;
 const MAX_REVENUE_24H_USD = 20;
 const MAX_ELECTRICITY_PRICE_PER_KWH = 10;
-const SIGNIFICANT_PROFIT_DELTA_USD = 0.10;
-const SIGNIFICANT_PROFIT_RELATIVE = 0.20;
-const SIGNIFICANT_EFFICIENCY_DELTA = 0.02;
-const SIGNIFICANT_EFFICIENCY_RELATIVE = 0.25;
 
 function normalizeWhitespace(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -156,21 +154,95 @@ function extractDirectListItems(html) {
   return items;
 }
 
-function exactGpuMarker(html) {
+function parseHardwareUrl(value) {
+  const raw = String(value ?? '').trim();
+  const protocol = raw.match(/^([a-z][a-z\d+.-]*):\/\//i)?.[1]?.toLowerCase();
+  if (protocol !== 'https') return { ok: false, reason: 'url_must_use_https' };
+  const host = raw.match(/^https:\/\/([^/?#]+)/i)?.[1]?.toLowerCase();
+  if (!['hashrate.no', 'www.hashrate.no'].includes(host)) {
+    return { ok: false, reason: 'url_host_must_be_hashrate_no' };
+  }
+  if (/[?#]/.test(raw)) return { ok: false, reason: 'url_must_not_have_query_or_fragment' };
+  const match = raw.match(/^https:\/\/(?:hashrate\.no|www\.hashrate\.no)\/(gpus|cpus)\/([^/]+)\/?$/i);
+  if (!match) return { ok: false, reason: 'url_path_must_be_gpu_or_cpu_page' };
+  const type = match[1].toLowerCase() === 'gpus' ? 'gpu' : 'cpu';
+  const slug = match[2].toLowerCase();
+  return {
+    ok: true,
+    type,
+    slug,
+    url: `https://${host}/${match[1].toLowerCase()}/${slug}/`,
+  };
+}
+
+function normalizeHardwareEntry(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+  const name = normalizeWhitespace(entry.name);
+  const parsedUrl = parseHardwareUrl(entry.url);
+  if (!name || !parsedUrl.ok) return null;
+  return {
+    name,
+    url: parsedUrl.url,
+    type: parsedUrl.type,
+    slug: parsedUrl.slug,
+    key: `${parsedUrl.type}:${parsedUrl.slug}`,
+  };
+}
+
+function validateHardwareConfig(value) {
+  const entries = Array.isArray(value) ? value : value?.hardware;
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return { ok: false, hardware: [], errors: ['hardware must be a non-empty array'] };
+  }
+
+  const hardware = [];
+  const errors = [];
+  const names = new Set();
+  const urls = new Set();
+  for (const [index, entry] of entries.entries()) {
+    const normalized = normalizeHardwareEntry(entry);
+    if (!normalized) {
+      const name = normalizeWhitespace(entry?.name) || `entry ${index + 1}`;
+      const urlReason = parseHardwareUrl(entry?.url).reason;
+      errors.push(`${name}: ${urlReason === 'invalid_url' ? 'invalid url' : 'name and url are required'}`);
+      continue;
+    }
+    const nameKey = normalized.name.toLowerCase();
+    if (names.has(nameKey)) errors.push(`${normalized.name}: duplicate name`);
+    if (urls.has(normalized.url)) errors.push(`${normalized.name}: duplicate url`);
+    names.add(nameKey);
+    urls.add(normalized.url);
+    hardware.push(normalized);
+  }
+  return { ok: errors.length === 0, hardware: errors.length ? [] : hardware, errors };
+}
+
+function parseHardwareConfigText(text) {
+  let value;
+  try {
+    value = JSON.parse(String(text));
+  } catch (error) {
+    return { ok: false, hardware: [], errors: [`invalid JSON: ${error.message}`] };
+  }
+  return validateHardwareConfig(value);
+}
+
+function exactHardwareMarker(html, hardware) {
   const titleTag = extractFirstTag(html, 'title');
   const titleMatch = String(html).match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
   const title = titleMatch ? stripTags(titleMatch[1]) : '';
   const metaTags = String(html).match(/<meta\b[^>]*>/gi) || [];
   const metaTitleTag = metaTags.find((tag) => /\bname\s*=\s*(["'])title\1/i.test(tag));
   const metaTitle = metaTitleTag ? extractAttribute(metaTitleTag, 'content') : '';
-  const expectedTitle = title === EXPECTED_GPU || title.startsWith(`${EXPECTED_GPU} |`);
-  const expectedMeta = !metaTitle || metaTitle === EXPECTED_GPU;
+  const expectedName = normalizeWhitespace(hardware?.name);
+  const expectedTitle = title === expectedName || title.startsWith(`${expectedName} |`);
+  const expectedMeta = !metaTitle || metaTitle === expectedName;
 
   return {
-    ok: Boolean(titleTag && expectedTitle && expectedMeta),
+    ok: Boolean(titleTag && expectedName && expectedTitle && expectedMeta),
     title,
     metaTitle,
-    reason: !titleTag ? 'missing_title' : !expectedTitle ? 'wrong_gpu_title' : !expectedMeta ? 'wrong_gpu_meta_title' : '',
+    reason: !titleTag ? 'missing_title' : !expectedName ? 'missing_hardware_name' : !expectedTitle ? 'wrong_hardware_title' : !expectedMeta ? 'wrong_hardware_meta_title' : '',
   };
 }
 
@@ -222,11 +294,13 @@ function parseRow(row) {
   };
 }
 
-function parseSource(html) {
+function parseSource(html, hardware = DEFAULT_HARDWARE) {
   if (typeof html !== 'string' || !html.trim()) {
     return { ok: false, reason: 'empty_source', rows: [], rejected: [] };
   }
-  const marker = exactGpuMarker(html);
+  const normalizedHardware = normalizeHardwareEntry(hardware);
+  if (!normalizedHardware) return { ok: false, reason: 'invalid_hardware', rows: [], rejected: [] };
+  const marker = exactHardwareMarker(html, normalizedHardware);
   if (!marker.ok) return { ok: false, reason: marker.reason, rows: [], rejected: [] };
 
   const listItems = extractDirectListItems(html);
@@ -240,26 +314,6 @@ function parseSource(html) {
     else rejected.push(parsed.reason);
   }
   return { ok: true, reason: '', rows, rejected };
-}
-
-function hashString(value) {
-  let hash = 2166136261;
-  for (const character of String(value)) {
-    hash ^= character.codePointAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16);
-}
-
-function snapshotHash(coins) {
-  const signature = coins.slice().sort((a, b) => a.key.localeCompare(b.key)).map((coin) => [
-    coin.key,
-    coin.coin,
-    coin.hashrate,
-    coin.powerW,
-    coin.revenue24h,
-  ]);
-  return hashString(JSON.stringify(signature));
 }
 
 function suspiciousSpike(raw, previousValues) {
@@ -278,7 +332,7 @@ function calculateCoin(raw, electricityRate, source, fetchedAt) {
   if ([energyKwhPerDay, electricityCostPerDay, netProfit, profitPerWatt, profitPerKwh].some((value) => !Number.isFinite(value))) {
     return null;
   }
-  const coin = {
+  return {
     coin: raw.coin,
     ticker: raw.ticker,
     algorithm: raw.algorithm,
@@ -300,12 +354,10 @@ function calculateCoin(raw, electricityRate, source, fetchedAt) {
     profit_per_watt: profitPerWatt,
     profitPerKwh,
     profit_per_kwh: profitPerKwh,
-    thresholdMet: isThresholdMet(netProfit),
     source,
     fetchedAt,
     key: stableKey(raw.ticker, raw.algorithm),
   };
-  return coin;
 }
 
 function deduplicateCoins(coins) {
@@ -319,8 +371,8 @@ function deduplicateCoins(coins) {
   return [...byKey.values()];
 }
 
-function calculateSourceCoins(html, electricityRate, source, fetchedAt, previousValues = {}) {
-  const parsed = parseSource(html);
+function calculateSourceCoins(html, electricityRate, source, fetchedAt, previousValues = {}, hardware = DEFAULT_HARDWARE) {
+  const parsed = parseSource(html, hardware);
   if (!parsed.ok) return { ...parsed, coins: [], suspiciousCount: 0 };
   if (!Number.isFinite(electricityRate) || electricityRate < 0 || electricityRate > MAX_ELECTRICITY_PRICE_PER_KWH) {
     return { ok: false, reason: 'invalid_electricity_rate', rows: [], rejected: parsed.rejected, coins: [], suspiciousCount: 0 };
@@ -356,13 +408,13 @@ function calculateSourceCoins(html, electricityRate, source, fetchedAt, previous
 function rankCoins(coins) {
   if (!coins.length) return { ranked: [], rawLeader: null, maxRawNetProfit: null, baselinePowerW: null };
   const maxRawNetProfit = Math.max(...coins.map((coin) => coin.netProfit));
-  const competitive = coins.filter((coin) => coin.netProfit >= maxRawNetProfit - COMPETITIVE_GAP_USD);
+  const competitive = coins.filter((coin) => coin.netProfit >= maxRawNetProfit - 0.10);
   const baselinePowerW = Math.min(...competitive.map((coin) => coin.powerW));
   const ranked = coins.map((coin) => {
-    const penalty = Math.min(COMPETITIVE_GAP_USD, Math.max(0, coin.powerW - baselinePowerW) * 0.001);
+    const penalty = Math.min(0.10, Math.max(0, coin.powerW - baselinePowerW) * 0.001);
     return {
       ...coin,
-      competitive: coin.netProfit >= maxRawNetProfit - COMPETITIVE_GAP_USD,
+      competitive: coin.netProfit >= maxRawNetProfit - 0.10,
       penalty,
       score: coin.netProfit - penalty,
     };
@@ -375,115 +427,175 @@ function rankCoins(coins) {
   };
 }
 
-function isThresholdMet(netProfit) {
-  return Number.isFinite(netProfit) && netProfit >= ALERT_THRESHOLD_USD;
-}
-
-function thresholdClassification(netProfit) {
-  if (!Number.isFinite(netProfit)) return 'invalid';
-  return isThresholdMet(netProfit) ? 'at_or_above_1.25' : 'below_1.25';
-}
-
-function hasSignificantIncrease(current, previous, absoluteDelta, relativeDelta) {
-  if (!Number.isFinite(current) || !Number.isFinite(previous)) return false;
-  const delta = current - previous;
-  return delta > 0 && (delta >= absoluteDelta || (previous > 0 && delta / previous >= relativeDelta));
-}
-
-function meaningfulRankChange(previousRank, currentRank) {
-  if (!previousRank?.length || !currentRank?.length) return false;
-  if (previousRank[0] !== currentRank[0]) return true;
-  const previousTop = previousRank.slice(0, 3);
-  const currentTop = currentRank.slice(0, 3);
-  if (previousTop.some((key) => !currentTop.includes(key)) || currentTop.some((key) => !previousTop.includes(key))) return true;
-  return previousTop.some((key) => {
-    const oldIndex = previousRank.indexOf(key);
-    const newIndex = currentRank.indexOf(key);
-    return newIndex >= 0 && Math.abs(oldIndex - newIndex) >= 1;
-  });
-}
-
 function parserCollapse(previousValues, currentCoins) {
   const previousCount = Object.keys(previousValues || {}).length;
   return previousCount >= 4 && currentCoins.length * 2 < previousCount;
 }
 
-function createInitialState() {
+function hardwareSummary(hardware) {
+  const normalized = normalizeHardwareEntry(hardware);
+  return normalized ? { ...normalized } : null;
+}
+
+function createDeviceState(hardware = null) {
   return {
-    version: 1,
+    hardware: hardwareSummary(hardware),
     lastFetchedAt: null,
     lastSuccessfulFetchedAt: null,
-    lastChangedAt: null,
-    lastRate: null,
-    snapshotHash: null,
     previousValues: {},
     previousRank: [],
-    seenCoins: {},
-    lastAlert: null,
-    pendingDiscordAlert: null,
-    pendingEvents: [],
-    lastDiscordError: null,
+    lastDiscord: null,
     lastError: null,
   };
 }
 
-function normalizeState(state) {
-  const initial = createInitialState();
-  const value = state && typeof state === 'object' ? state : {};
+function normalizeDeviceState(value, hardware = null) {
+  const initial = createDeviceState(hardware);
+  const source = value && typeof value === 'object' ? value : {};
   return {
     ...initial,
-    ...value,
-    previousValues: value.previousValues && typeof value.previousValues === 'object' ? value.previousValues : {},
-    previousRank: Array.isArray(value.previousRank) ? value.previousRank : [],
-    seenCoins: value.seenCoins && typeof value.seenCoins === 'object' ? value.seenCoins : {},
-    pendingEvents: Array.isArray(value.pendingEvents) ? value.pendingEvents : [],
+    ...source,
+    hardware: hardwareSummary(hardware) || source.hardware || null,
+    previousValues: source.previousValues && typeof source.previousValues === 'object' ? source.previousValues : {},
+    previousRank: Array.isArray(source.previousRank) ? source.previousRank : [],
   };
 }
 
-function event(type, key, coin) {
+function createInitialState() {
+  return { version: 2, devices: {} };
+}
+
+function normalizeState(state, hardwareList = []) {
+  const value = state && typeof state === 'object' ? state : {};
+  const configured = hardwareList.filter(Boolean).map((hardware) => normalizeHardwareEntry(hardware)).filter(Boolean);
+  const configuredByKey = new Map(configured.map((hardware) => [hardware.key, hardware]));
+  const devices = {};
+
+  if (value.version === 2 && value.devices && typeof value.devices === 'object') {
+    for (const [key, device] of Object.entries(value.devices)) {
+      const hardware = configuredByKey.get(key) || device?.hardware || null;
+      devices[key] = normalizeDeviceState(device, hardware);
+    }
+    return { version: 2, devices };
+  }
+
+  const legacyHardware = configured.find((hardware) => hardware.key === DEFAULT_HARDWARE.key) || configured[0];
+  if (legacyHardware && (value.previousValues || value.previousRank || value.lastFetchedAt || value.lastSuccessfulFetchedAt)) {
+    devices[legacyHardware.key] = normalizeDeviceState({
+      hardware: legacyHardware,
+      lastFetchedAt: value.lastFetchedAt || null,
+      lastSuccessfulFetchedAt: value.lastSuccessfulFetchedAt || null,
+      previousValues: value.previousValues || {},
+      previousRank: value.previousRank || [],
+      lastError: value.lastError || null,
+    }, legacyHardware);
+  }
+  return { version: 2, devices };
+}
+
+function replaceDevice(state, hardwareKey, device) {
   return {
-    id: `${type}:${key || 'gpu'}`,
-    type,
-    key: key || null,
-    coin: coin?.coin || null,
-    ticker: coin?.ticker || null,
+    version: 2,
+    devices: {
+      ...(state.devices || {}),
+      [hardwareKey]: device,
+    },
   };
 }
 
-function detectEvents(state, rankedResult) {
-  const { ranked, rawLeader } = rankedResult;
-  const previousValues = state.previousValues || {};
-  const currentByKey = Object.fromEntries(ranked.map((coin) => [coin.key, coin]));
-  const events = [];
-  const add = (value) => {
-    if (!events.some((existing) => existing.id === value.id)) events.push(value);
+function validTimestamp(value) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+function failedDeviceRun(state, hardware, timestamp, reason, rejected = []) {
+  const hardwareKey = hardware?.key || 'unknown';
+  const previous = state.devices?.[hardwareKey] || createDeviceState(hardware);
+  const device = {
+    ...previous,
+    hardware: hardwareSummary(hardware) || previous.hardware,
+    lastFetchedAt: timestamp,
+    lastError: { at: timestamp, reason, rejected },
   };
+  return {
+    ok: false,
+    sourceStatus: reason,
+    hardware: hardwareSummary(hardware),
+    hardwareKey,
+    ranked: [],
+    rawLeader: null,
+    digestPayload: null,
+    nextState: replaceDevice(state, hardwareKey, device),
+    error: reason,
+    rejected,
+  };
+}
 
-  if (!state.lastAlert && !state.pendingDiscordAlert && ranked.length) add(event('initial_digest'));
-  for (const coin of ranked) {
-    const seen = state.seenCoins?.[coin.key];
-    if (coin.competitive && (!seen || !seen.competitive)) add(event('new_competitive_coin', coin.key, coin));
-    const previous = previousValues[coin.key];
-    if (!previous) continue;
-    if (!isThresholdMet(previous.netProfit) && isThresholdMet(coin.netProfit)) add(event('threshold_crossing', coin.key, coin));
-    if (hasSignificantIncrease(coin.netProfit, previous.netProfit, SIGNIFICANT_PROFIT_DELTA_USD, SIGNIFICANT_PROFIT_RELATIVE)) {
-      add(event('profit_improvement', coin.key, coin));
-    }
-    if (hasSignificantIncrease(coin.profitPerKwh, previous.profitPerKwh, SIGNIFICANT_EFFICIENCY_DELTA, SIGNIFICANT_EFFICIENCY_RELATIVE)) {
-      add(event('efficiency_improvement', coin.key, coin));
-    }
+function processDeviceRun({ hardware, html, state, electricityRate, fetchedAt = new Date().toISOString() }) {
+  const normalizedHardware = normalizeHardwareEntry(hardware);
+  const timestamp = validTimestamp(fetchedAt) || new Date().toISOString();
+  const currentState = normalizeState(state, normalizedHardware ? [normalizedHardware] : []);
+  if (!normalizedHardware) return failedDeviceRun(currentState, hardware, timestamp, 'invalid_hardware');
+  if (!Number.isFinite(electricityRate) || electricityRate < 0 || electricityRate > MAX_ELECTRICITY_PRICE_PER_KWH) {
+    return failedDeviceRun(currentState, normalizedHardware, timestamp, 'invalid_electricity_rate');
   }
 
-  const currentRank = ranked.map((coin) => coin.key);
-  if (meaningfulRankChange(state.previousRank, currentRank)) add(event('rank_change'));
-  for (const key of Object.keys(previousValues)) {
-    if (!currentByKey[key]) add(event('disappearance', key, previousValues[key]));
+  const currentDevice = currentState.devices[normalizedHardware.key] || createDeviceState(normalizedHardware);
+  const calculated = calculateSourceCoins(
+    html,
+    electricityRate,
+    normalizedHardware.url,
+    timestamp,
+    currentDevice.previousValues,
+    normalizedHardware,
+  );
+  if (!calculated.ok) return failedDeviceRun(currentState, normalizedHardware, timestamp, calculated.reason, calculated.rejected);
+  if (parserCollapse(currentDevice.previousValues, calculated.coins)) {
+    return failedDeviceRun(currentState, normalizedHardware, timestamp, 'parser_collapse', calculated.rejected);
   }
-  if (ranked.length && rawLeader && ranked[0].key !== rawLeader.key && ranked[0].powerW < rawLeader.powerW &&
-      (!state.previousRank.length || state.previousRank[0] !== ranked[0].key)) {
-    add(event('efficient_alternative', ranked[0].key, ranked[0]));
-  }
-  return events;
+  if (!calculated.coins.length) return failedDeviceRun(currentState, normalizedHardware, timestamp, 'no_valid_rows', calculated.rejected);
+
+  const rankedResult = rankCoins(calculated.coins);
+  const device = {
+    ...currentDevice,
+    hardware: normalizedHardware,
+    lastFetchedAt: timestamp,
+    lastSuccessfulFetchedAt: timestamp,
+    previousValues: Object.fromEntries(rankedResult.ranked.map((coin) => [coin.key, coin])),
+    previousRank: rankedResult.ranked.map((coin) => coin.key),
+    lastError: null,
+  };
+  const nextState = replaceDevice(currentState, normalizedHardware.key, device);
+  return {
+    ok: true,
+    sourceStatus: 'ok',
+    hardware: normalizedHardware,
+    hardwareKey: normalizedHardware.key,
+    coins: calculated.coins,
+    ranked: rankedResult.ranked,
+    rawLeader: rankedResult.rawLeader,
+    maxRawNetProfit: rankedResult.maxRawNetProfit,
+    baselinePowerW: rankedResult.baselinePowerW,
+    digestPayload: buildDiscordPayload(rankedResult, normalizedHardware, electricityRate, timestamp),
+    nextState,
+    rejected: calculated.rejected,
+  };
+}
+
+function completeDiscord(state, hardwareKey, { success, sentAt = new Date().toISOString(), statusCode = null, error = '' } = {}) {
+  const currentState = normalizeState(state);
+  const device = currentState.devices[hardwareKey];
+  if (!device) return currentState;
+  const timestamp = validTimestamp(sentAt) || new Date().toISOString();
+  return replaceDevice(currentState, hardwareKey, {
+    ...device,
+    lastDiscord: {
+      at: timestamp,
+      success: Boolean(success),
+      statusCode: Number.isFinite(Number(statusCode)) ? Number(statusCode) : null,
+      error: success ? null : String(error || 'discord_request_failed'),
+    },
+  });
 }
 
 function formatUsd(value) {
@@ -509,177 +621,50 @@ function coinLine(coin) {
   return `${coin.rank}. ${coin.coin} (${coin.ticker}/${coin.algorithm}) | Net profit: ${formatUsd(coin.netProfit)}/day | Power: ${coin.powerW}W | Efficiency: ${formatUsd(coin.profitPerKwh)} net profit/kWh`;
 }
 
-function buildDiscordPayload(rankedResult, events, electricityRate, source, fetchedAt) {
+function buildDiscordPayload(rankedResult, hardware, electricityRate, fetchedAt) {
   const top = rankedResult.ranked.slice(0, 3);
   const rawLeader = rankedResult.rawLeader;
+  const typeLabel = String(hardware.type || 'hardware').toUpperCase();
   const lines = [
     `Fetched: ${formatIct(fetchedAt)} profitable coins digest`,
-    `GPU: ${EXPECTED_GPU}`,
+    `${typeLabel}: ${hardware.name}`,
     `Electricity rate: ${formatUsd(electricityRate)}/kWh`,
     '',
     ...top.map(coinLine),
   ];
-  if (rawLeader && (!top[0] || rawLeader.key !== top[0].key)) lines.push(`Raw-profit leader: ${rawLeader.coin} (${rawLeader.ticker}/${rawLeader.algorithm}) | Net profit: ${formatUsd(rawLeader.netProfit)}/day | Power: ${rawLeader.powerW}W`);
-  lines.push('', `Source: ${source}`);
+  if (rawLeader && (!top[0] || rawLeader.key !== top[0].key)) {
+    lines.push(`Raw-profit leader: ${rawLeader.coin} (${rawLeader.ticker}/${rawLeader.algorithm}) | Net profit: ${formatUsd(rawLeader.netProfit)}/day | Power: ${rawLeader.powerW}W`);
+  }
+  lines.push('', `Source: ${hardware.url}`);
   return {
     content: lines.join('\n'),
     allowed_mentions: { parse: [] },
   };
 }
 
-function mergeEvents(existing, additions) {
-  const result = [...(existing || [])];
-  for (const addition of additions || []) {
-    if (!result.some((item) => item.id === addition.id)) result.push(addition);
-  }
-  return result;
-}
-
-function validTimestamp(value) {
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
-}
-
-function failedRun(state, timestamp, reason, rejected = []) {
-  const nextState = {
-    ...state,
-    lastFetchedAt: timestamp,
-    lastError: { at: timestamp, reason, rejected },
-  };
-  return {
-    ok: false,
-    sourceStatus: reason,
-    stale: false,
-    coins: [],
-    ranked: [],
-    rawLeader: null,
-    events: [],
-    pendingDiscordAlert: nextState.pendingDiscordAlert,
-    shouldPostDiscord: false,
-    nextState,
-    error: reason,
-  };
-}
-
-function processRun({ html, state, electricityRate, source = SOURCE_URL, fetchedAt = new Date().toISOString(), discordWebhookUrl = '' }) {
-  const currentState = normalizeState(state);
-  const timestamp = validTimestamp(fetchedAt);
-  if (!timestamp) return failedRun(currentState, new Date().toISOString(), 'invalid_fetched_at');
-  if (!Number.isFinite(electricityRate) || electricityRate < 0 || electricityRate > MAX_ELECTRICITY_PRICE_PER_KWH) {
-    return failedRun(currentState, timestamp, 'invalid_electricity_rate');
-  }
-
-  const calculated = calculateSourceCoins(html, electricityRate, source, timestamp, currentState.previousValues);
-  if (!calculated.ok) return failedRun(currentState, timestamp, calculated.reason, calculated.rejected);
-  if (parserCollapse(currentState.previousValues, calculated.coins)) {
-    return failedRun(currentState, timestamp, 'parser_collapse', calculated.rejected);
-  }
-  if (!calculated.coins.length) return failedRun(currentState, timestamp, 'no_valid_rows', calculated.rejected);
-
-  const rankedResult = rankCoins(calculated.coins);
-  const currentHash = snapshotHash(calculated.coins);
-  const unchanged = currentState.snapshotHash === currentHash && currentState.lastRate === electricityRate;
-  const lastChangedAt = unchanged ? currentState.lastChangedAt || timestamp : timestamp;
-  const age = lastChangedAt ? new Date(timestamp).getTime() - new Date(lastChangedAt).getTime() : 0;
-  const stale = unchanged && age > STALE_AFTER_MS;
-  const events = stale ? [] : detectEvents(currentState, rankedResult);
-  const pendingEvents = mergeEvents(currentState.pendingEvents, events);
-  let pendingDiscordAlert = currentState.pendingDiscordAlert;
-  if (pendingEvents.length) {
-    const payload = buildDiscordPayload(rankedResult, pendingEvents, electricityRate, source, timestamp);
-    pendingDiscordAlert = {
-      id: hashString(`${currentHash}|${pendingEvents.map((item) => item.id).join('|')}`),
-      createdAt: pendingDiscordAlert?.createdAt || timestamp,
-      events: pendingEvents,
-      payload,
-      snapshotHash: currentHash,
-    };
-  }
-
-  const seenCoins = { ...currentState.seenCoins };
-  for (const coin of rankedResult.ranked) {
-    const previous = seenCoins[coin.key];
-    seenCoins[coin.key] = {
-      firstSeenAt: previous?.firstSeenAt || timestamp,
-      lastSeenAt: timestamp,
-      competitive: coin.competitive,
-    };
-  }
-  const nextState = {
-    ...currentState,
-    lastFetchedAt: timestamp,
-    lastSuccessfulFetchedAt: timestamp,
-    lastChangedAt,
-    lastRate: electricityRate,
-    snapshotHash: currentHash,
-    previousValues: Object.fromEntries(rankedResult.ranked.map((coin) => [coin.key, coin])),
-    previousRank: rankedResult.ranked.map((coin) => coin.key),
-    seenCoins,
-    pendingDiscordAlert,
-    pendingEvents: pendingDiscordAlert ? pendingDiscordAlert.events : [],
-    lastError: null,
-  };
-  return {
-    ok: true,
-    sourceStatus: stale ? 'stale' : 'ok',
-    stale,
-    coins: calculated.coins,
-    ranked: rankedResult.ranked,
-    rawLeader: rankedResult.rawLeader,
-    maxRawNetProfit: rankedResult.maxRawNetProfit,
-    baselinePowerW: rankedResult.baselinePowerW,
-    events,
-    pendingDiscordAlert,
-    shouldPostDiscord: Boolean(pendingDiscordAlert && discordWebhookUrl && !stale),
-    nextState,
-    rejected: calculated.rejected,
-  };
-}
-
-function completeDiscord(state, { success, sentAt = new Date().toISOString(), error = '' } = {}) {
-  const currentState = normalizeState(state);
-  const pending = currentState.pendingDiscordAlert;
-  if (!pending) return currentState;
-  const timestamp = validTimestamp(sentAt) || new Date().toISOString();
-  if (success) {
-    return {
-      ...currentState,
-      lastAlert: {
-        id: pending.id,
-        sentAt: timestamp,
-        eventIds: pending.events.map((item) => item.id),
-      },
-      pendingDiscordAlert: null,
-      pendingEvents: [],
-      lastDiscordError: null,
-    };
-  }
-  return {
-    ...currentState,
-    lastDiscordError: { at: timestamp, error: String(error || 'discord_request_failed') },
-  };
-}
-
 const api = {
-  SOURCE_URL,
-  EXPECTED_GPU,
+  DEFAULT_HARDWARE,
   ICT_TIMEZONE,
-  ALERT_THRESHOLD_USD,
-  COMPETITIVE_GAP_USD,
-  STALE_AFTER_MS,
+  MAX_POWER_W,
+  MAX_REVENUE_24H_USD,
   MAX_ELECTRICITY_PRICE_PER_KWH,
+  normalizeWhitespace,
+  parseHardwareUrl,
+  normalizeHardwareEntry,
+  validateHardwareConfig,
+  parseHardwareConfigText,
+  exactHardwareMarker,
   parseSource,
   calculateSourceCoins,
   calculateCoin,
   deduplicateCoins,
   rankCoins,
   stableKey,
-  isThresholdMet,
-  thresholdClassification,
-  hasSignificantIncrease,
-  meaningfulRankChange,
+  parserCollapse,
+  createDeviceState,
   createInitialState,
-  processRun,
+  normalizeState,
+  processDeviceRun,
   completeDiscord,
   formatIct,
   buildDiscordPayload,
