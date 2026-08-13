@@ -9,6 +9,10 @@
       "url": "https://hashrate.no/gpus/2070"
     },
     {
+      "name": "NVIDIA RTX 2060",
+      "url": "https://hashrate.no/gpus/2060"
+    },
+    {
       "name": "NVIDIA RTX 3050 8GB",
       "url": "https://hashrate.no/gpus/3050"
     },
