@@ -3,6 +3,18 @@
     {
       "name": "NVIDIA RTX 5060 Ti 16GB",
       "url": "https://www.hashrate.no/gpus/5060ti/"
+    },
+    {
+      "name": "NVIDIA RTX 2070",
+      "url": "https://hashrate.no/gpus/2070"
+    },
+    {
+      "name": "NVIDIA RTX 3050 8GB",
+      "url": "https://hashrate.no/gpus/3050"
+    },
+    {
+      "name": "NVIDIA CMP 30HX",
+      "url": "https://hashrate.no/gpus/cmp30"
     }
   ]
 }
