@@ -1,0 +1,4 @@
+/home/louistran/projects/coin-detect/README.md
+/home/louistran/projects/coin-detect/compose.yml
+/home/louistran/projects/coin-detect/docs/OPERATIONS.md
+/home/louistran/projects/coin-detect/docs/SETUP.md

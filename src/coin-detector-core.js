@@ -90,6 +90,26 @@ function parseNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function parseHashrate(value) {
+  const text = normalizeWhitespace(value);
+  const match = text.match(/^(\d[\d.,]*)\s*([kMGTPE]?)(h|sol)\/s$/i);
+  if (!match) return null;
+  const amount = parseNumber(match[1]);
+  if (amount === null) return null;
+  const prefix = match[2] ? (match[2].toLowerCase() === 'k' ? 'k' : match[2].toUpperCase()) : '';
+  const base = match[3].toLowerCase() === 'sol' ? 'Sol' : 'H';
+  return { value: amount, unit: `${prefix}${base}/s` };
+}
+
+function calculateHashrateEfficiency(hashrate, powerW) {
+  const parsed = parseHashrate(hashrate);
+  if (!parsed || !Number.isFinite(powerW) || powerW <= 0) return null;
+  return {
+    value: parsed.value / powerW,
+    unit: `${parsed.unit}/W`,
+  };
+}
+
 function extractDataValue(row, names) {
   for (const name of names) {
     const value = extractAttribute(row, name);
@@ -329,6 +349,7 @@ function calculateCoin(raw, electricityRate, source, fetchedAt) {
   const netProfit = raw.revenue24h - electricityCostPerDay;
   const profitPerWatt = netProfit / raw.powerW;
   const profitPerKwh = netProfit / energyKwhPerDay;
+  const hashrateEfficiency = calculateHashrateEfficiency(raw.hashrate, raw.powerW);
   if ([energyKwhPerDay, electricityCostPerDay, netProfit, profitPerWatt, profitPerKwh].some((value) => !Number.isFinite(value))) {
     return null;
   }
@@ -337,6 +358,9 @@ function calculateCoin(raw, electricityRate, source, fetchedAt) {
     ticker: raw.ticker,
     algorithm: raw.algorithm,
     hashrate: raw.hashrate,
+    hashratePerWatt: hashrateEfficiency?.value ?? null,
+    hashrate_per_watt: hashrateEfficiency?.value ?? null,
+    hashratePerWattUnit: hashrateEfficiency?.unit ?? null,
     powerW: raw.powerW,
     power: raw.powerW,
     revenue24h: raw.revenue24h,
@@ -617,27 +641,57 @@ function formatIct(timestamp) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ICT`;
 }
 
-function coinLine(coin) {
-  return `${coin.rank}. ${coin.coin} (${coin.ticker}/${coin.algorithm}) | Net profit: ${formatUsd(coin.netProfit)}/day | Power: ${coin.powerW}W | Efficiency: ${formatUsd(coin.profitPerKwh)} net profit/kWh`;
+function coinBlock(coin, electricityRate) {
+  const hashrateEfficiency = Number.isFinite(coin.hashratePerWatt) && coin.hashratePerWattUnit
+    ? `${coin.hashratePerWatt.toFixed(3)} ${coin.hashratePerWattUnit}`
+    : 'Unavailable';
+  const energy24h = Number.isFinite(coin.energyKwhPerDay)
+    ? `${coin.energyKwhPerDay.toFixed(2)} kWh`
+    : 'Unavailable';
+  const revenuePerKwh = Number.isFinite(coin.energyKwhPerDay) && coin.energyKwhPerDay > 0
+    ? `${formatUsd(coin.revenue24h / coin.energyKwhPerDay)}/kWh`
+    : 'Unavailable';
+  return [
+    `${coin.rank}. **${coin.coin}** (${coin.ticker}) • ${coin.algorithm}`,
+    '',
+    'HASHRATE',
+    `Hashrate (mining speed): ${coin.hashrate}`,
+    `Efficiency (hashrate per watt): ${hashrateEfficiency}`,
+    '',
+    'POWER',
+    `Power (estimated draw): ${coin.powerW} W`,
+    `Energy use (24h): ${energy24h}`,
+    `Electricity cost (24h): ${formatUsd(coin.electricityCostPerDay)}`,
+    '',
+    'INCOME',
+    `Revenue (24h, before electricity): ${formatUsd(coin.revenue24h)}`,
+    `Revenue efficiency (24h revenue per kWh): ${revenuePerKwh}`,
+    `Net profit (24h, after electricity): ${formatUsd(coin.netProfit)}`,
+    `Efficiency (net profit per kWh): ${formatUsd(coin.profitPerKwh)}/kWh`,
+  ].join('\n');
 }
 
 function buildDiscordPayload(rankedResult, hardware, electricityRate, fetchedAt) {
   const top = rankedResult.ranked.slice(0, 3);
   const rawLeader = rankedResult.rawLeader;
   const typeLabel = String(hardware.type || 'hardware').toUpperCase();
-  const lines = [
-    `Fetched: ${formatIct(fetchedAt)} profitable coins digest`,
-    `${typeLabel}: ${hardware.name}`,
-    `Electricity rate: ${formatUsd(electricityRate)}/kWh`,
-    '',
-    ...top.map(coinLine),
-  ];
+  const blocks = top.map((coin) => coinBlock(coin, electricityRate));
   if (rawLeader && (!top[0] || rawLeader.key !== top[0].key)) {
-    lines.push(`Raw-profit leader: ${rawLeader.coin} (${rawLeader.ticker}/${rawLeader.algorithm}) | Net profit: ${formatUsd(rawLeader.netProfit)}/day | Power: ${rawLeader.powerW}W`);
+    blocks.push(`Highest raw net profit: ${rawLeader.coin} (${rawLeader.ticker}/${rawLeader.algorithm}) — ${formatUsd(rawLeader.netProfit)} after electricity, using ${rawLeader.powerW} W`);
   }
-  lines.push('', `Source: ${hardware.url}`);
   return {
-    content: lines.join('\n'),
+    embeds: [{
+      description: [
+        `Fetched: ${formatIct(fetchedAt)} profitable coins digest`,
+        `Hardware: ${typeLabel} • **${hardware.name}**`,
+        `Electricity rate: ${formatUsd(electricityRate)}/kWh`,
+        '',
+        blocks.join('\n\n'),
+      ].join('\n'),
+      url: hardware.url,
+      color: 0x5865f2,
+      footer: { text: 'Source: Hashrate.no' },
+    }],
     allowed_mentions: { parse: [] },
   };
 }
@@ -649,6 +703,8 @@ const api = {
   MAX_REVENUE_24H_USD,
   MAX_ELECTRICITY_PRICE_PER_KWH,
   normalizeWhitespace,
+  parseHashrate,
+  calculateHashrateEfficiency,
   parseHardwareUrl,
   normalizeHardwareEntry,
   validateHardwareConfig,

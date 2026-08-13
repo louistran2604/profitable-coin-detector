@@ -94,6 +94,20 @@ test('uses Rev. 24h for net profit and calculates electricity efficiency', () =>
   assert.equal(parsed.coins[0].profitPerKwh, 0.4166666666666667);
 });
 
+test('calculates hashrate efficiency in the source hashrate unit', () => {
+  const coin = core.calculateCoin({
+    coin: 'Pearl',
+    ticker: 'PRL',
+    algorithm: 'pearl-pow',
+    hashrate: '80.87 Th/s',
+    powerW: 109,
+    revenue24h: 1.36,
+  }, RATE, GPU.url, 'now');
+  assert.equal(coin.hashratePerWattUnit, 'TH/s/W');
+  assert.ok(Math.abs(coin.hashratePerWatt - (80.87 / 109)) < 1e-12);
+  assert.equal(core.calculateHashrateEfficiency('not a hashrate', 109), null);
+});
+
 test('does not gate daily digests on the old $1.25 threshold', () => {
   for (const net of [1.24, 1.25, 1.26]) {
     const result = run(GPU, page([coinRow({ ticker: `N${String(net).replace('.', '')}`, net })]));
@@ -124,11 +138,26 @@ test('sends a digest every successful day, including unchanged results', () => {
   const html = page([coinRow({ ticker: 'AAA', net: 0.50 })]);
   const first = run(GPU, html);
   assert.equal(first.ok, true);
-  assert.match(first.digestPayload.content, /^Fetched: 2026-08-10 08:15 ICT profitable coins digest/);
-  assert.match(first.digestPayload.content, /GPU: NVIDIA RTX 5060 Ti 16GB/);
-  assert.match(first.digestPayload.content, /Electricity rate: \$0\.10\/kWh/);
-  assert.match(first.digestPayload.content, /Efficiency: \$0\.21 net profit\/kWh/);
-  assert.doesNotMatch(first.digestPayload.content, /Events:/);
+  assert.equal(first.digestPayload.content, undefined);
+  assert.equal(first.digestPayload.embeds.length, 1);
+  const embed = first.digestPayload.embeds[0];
+  assert.equal(embed.title, undefined);
+  assert.match(embed.description, /^Fetched: 2026-08-10 08:15 ICT profitable coins digest/);
+  assert.match(embed.description, /Hardware: GPU • \*\*NVIDIA RTX 5060 Ti 16GB\*\*/);
+  assert.match(embed.description, /Electricity rate: \$0\.10\/kWh/);
+  assert.match(embed.description, /1\. \*\*Alpha Coin\*\* \(AAA\) • AlgoA/);
+  assert.match(embed.description, /HASHRATE\nHashrate \(mining speed\): 10 Mh\/s/);
+  assert.match(embed.description, /Efficiency \(hashrate per watt\): 0\.100 MH\/s\/W/);
+  assert.match(embed.description, /POWER\nPower \(estimated draw\): 100 W/);
+  assert.match(embed.description, /Energy use \(24h\): 2\.40 kWh/);
+  assert.match(embed.description, /Electricity cost \(24h\): \$0\.24/);
+  assert.match(embed.description, /INCOME\nRevenue \(24h, before electricity\): \$0\.74/);
+  assert.match(embed.description, /Revenue efficiency \(24h revenue per kWh\): \$0\.31\/kWh/);
+  assert.match(embed.description, /Net profit \(24h, after electricity\): \$0\.50/);
+  assert.match(embed.description, /Efficiency \(net profit per kWh\): \$0\.21\/kWh/);
+  assert.equal((embed.description.match(/\*\*/g) || []).length, 4);
+  assert.equal((JSON.stringify(first.digestPayload).match(/\*\*/g) || []).length, 4);
+  assert.doesNotMatch(JSON.stringify(first.digestPayload), /Events:/);
 
   const sent = core.completeDiscord(first.nextState, GPU.key, {
     success: true,
@@ -147,6 +176,9 @@ test('keeps GPU and CPU state separate and isolates a failed device', () => {
   const gpuFirst = run(GPU, gpuHtml);
   const cpuFirst = run(CPU, cpuHtml, gpuFirst.nextState);
   assert.equal(cpuFirst.ok, true);
+  assert.match(gpuFirst.digestPayload.embeds[0].description, /Hardware: GPU • \*\*NVIDIA RTX 5060 Ti 16GB\*\*/);
+  assert.match(cpuFirst.digestPayload.embeds[0].description, /Hardware: CPU • \*\*AMD Ryzen 9 7900X\*\*/);
+  assert.notEqual(gpuFirst.digestPayload.embeds[0].description, cpuFirst.digestPayload.embeds[0].description);
   assert.deepEqual(Object.keys(cpuFirst.nextState.devices).sort(), ['cpu:7900x', 'gpu:5060ti']);
 
   const gpuFailure = run(GPU, '', cpuFirst.nextState, '2026-08-11T01:15:00.000Z');
