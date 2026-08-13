@@ -11,6 +11,10 @@ const CPU = core.normalizeHardwareEntry({
   name: 'AMD Ryzen 9 7900X',
   url: 'https://www.hashrate.no/cpus/7900x/',
 });
+const XMRIG_CPU = core.normalizeHardwareEntry({
+  name: 'AMD Ryzen 9 7950X',
+  url: 'https://xmrig.com/benchmark?cpu=AMD+Ryzen+9+7950X',
+});
 
 function row({ coin = 'Alpha Coin', ticker = 'AAA', algorithm = 'AlgoA', hashrate = '10 Mh/s', power = 100, revenue, duplicateClass = '' }) {
   return `<li class="${duplicateClass}">
@@ -35,23 +39,61 @@ function coinRow(options) {
   return row({ ...options, revenue: options.revenue ?? revenueForNet(options.net, options.power) });
 }
 
+function xmrigRow(overrides = {}) {
+  return {
+    id: '533jZT',
+    size: 10000000,
+    algo: 'rx/0',
+    status: 3,
+    version: '6.25.0-C3',
+    done_ts: 1776754081329,
+    duration: 40098,
+    threads: 512,
+    threads_ok: true,
+    hashrate: 249388.99695745425,
+    hashrate_1t: 487.0878846825278,
+    os: 'windows',
+    cpu: { brand: XMRIG_CPU.name },
+    ...overrides,
+  };
+}
+
+function xmrigBody(rows) {
+  return JSON.stringify(rows);
+}
+
 function run(hardware, html, state = core.createInitialState(), fetchedAt = '2026-08-10T01:15:00.000Z') {
   return core.processDeviceRun({ html, state, electricityRate: RATE, hardware, fetchedAt });
 }
 
-test('validates configurable GPU and CPU hardware URLs', () => {
+test('validates configurable Hashrate.no and XMRig hardware URLs', () => {
   const config = core.parseHardwareConfigText(JSON.stringify({
     hardware: [
       { name: GPU.name, url: GPU.url },
       { name: CPU.name, url: CPU.url },
+      { name: XMRIG_CPU.name, url: XMRIG_CPU.url },
     ],
   }));
   assert.equal(config.ok, true);
-  assert.deepEqual(config.hardware.map((hardware) => hardware.type), ['gpu', 'cpu']);
-  assert.deepEqual(config.hardware.map((hardware) => hardware.key), ['gpu:5060ti', 'cpu:7900x']);
+  assert.deepEqual(config.hardware.map((hardware) => hardware.platform), ['hashrate-no', 'hashrate-no', 'xmrig']);
+  assert.deepEqual(config.hardware.map((hardware) => hardware.type), ['gpu', 'cpu', 'cpu']);
+  assert.deepEqual(config.hardware.map((hardware) => hardware.key), ['gpu:5060ti', 'cpu:7900x', 'xmrig:cpu:amd ryzen 9 7950x']);
+  assert.match(config.hardware[2].fetchUrl, /^https:\/\/api\.xmrig\.com\/1\/benchmarks\?algo=rx%2F0&cpu=/);
   assert.equal(core.parseHardwareUrl('http://www.hashrate.no/gpus/5060ti/').ok, false);
   assert.equal(core.parseHardwareUrl('https://example.com/gpus/5060ti/').ok, false);
   assert.equal(core.parseHardwareUrl('https://www.hashrate.no/cpus/7900x/?x=1').ok, false);
+  assert.equal(core.parseHardwareUrl('https://xmrig.com/benchmark').reason, 'xmrig_url_must_have_one_cpu_query');
+  assert.equal(core.parseHardwareUrl('https://xmrig.com/benchmark?cpu=Intel%28R%29+Xeon%28R%29+CPU+X5650+%40+2.67GHz').ok, true);
+  assert.equal(core.parseHardwareUrl('https://xmrig.com:443/benchmark?cpu=CPU').reason, 'invalid_url');
+  assert.equal(core.normalizeHardwareEntry({
+    name: 'Different CPU',
+    url: XMRIG_CPU.url,
+  }), null);
+  const trademarkConfig = core.normalizeHardwareEntry({
+    name: 'Intel® Core™ i5-3570 CPU @ 3.40GHz',
+    url: 'https://xmrig.com/benchmark?cpu=Intel%28R%29+Core%28TM%29+i5-3570+CPU+%40+3.40GHz',
+  });
+  assert.ok(trademarkConfig);
 });
 
 test('rejects missing, duplicate, and malformed hardware configuration entries', () => {
@@ -66,6 +108,11 @@ test('rejects missing, duplicate, and malformed hardware configuration entries',
   assert.ok(result.errors.some((error) => error.includes('duplicate name')));
   assert.ok(result.errors.some((error) => error.includes('duplicate url')));
   assert.equal(core.validateHardwareConfig([]).ok, false);
+  const mismatchedXmrig = core.validateHardwareConfig({
+    hardware: [{ name: 'Different CPU', url: XMRIG_CPU.url }],
+  });
+  assert.equal(mismatchedXmrig.ok, false);
+  assert.ok(mismatchedXmrig.errors.some((error) => error.includes('XMRig CPU name must match')));
 });
 
 test('matches each configured hardware page exactly', () => {
@@ -106,6 +153,87 @@ test('calculates hashrate efficiency in the source hashrate unit', () => {
   assert.equal(coin.hashratePerWattUnit, 'TH/s/W');
   assert.ok(Math.abs(coin.hashratePerWatt - (80.87 / 109)) < 1e-12);
   assert.equal(core.calculateHashrateEfficiency('not a hashrate', 109), null);
+});
+
+test('parses the best valid XMRig result with total and single-thread hashrate', () => {
+  const parsed = core.parseXmrigSource(xmrigBody([
+    xmrigRow({ threads_ok: false }),
+    xmrigRow({ id: 'valid', hashrate: '249389.00', hashrate_1t: '487.09' }),
+  ]), XMRIG_CPU);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.benchmark.id, 'valid');
+  assert.equal(parsed.benchmark.totalHashrate, 249389);
+  assert.equal(parsed.benchmark.singleThreadHashrate, 487.09);
+  assert.ok(parsed.rejected.includes('threads_not_validated'));
+});
+
+test('matches XMRig API trademark notation with the configured display name', () => {
+  const hardware = core.normalizeHardwareEntry({
+    name: 'Intel® Pentium® CPU G2030 @ 3.00GHz',
+    url: 'https://xmrig.com/benchmark?cpu=Intel%28R%29+Pentium%28R%29+CPU+G2030+%40+3.00GHz',
+  });
+  const parsed = core.parseXmrigSource(xmrigBody([xmrigRow({
+    cpu: { brand: 'Intel(R) Pentium(R) CPU G2030 @ 3.00GHz' },
+  })]), hardware);
+  assert.equal(parsed.ok, true);
+});
+
+test('creates an XMRig digest without profitability fields and persists its benchmark', () => {
+  const result = core.processDeviceRun({
+    hardware: XMRIG_CPU,
+    html: xmrigBody([xmrigRow()]),
+    state: core.createInitialState(),
+    electricityRate: Number.NaN,
+    fetchedAt: '2026-08-10T01:15:00.000Z',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.hardware.platform, 'xmrig');
+  assert.match(result.digestPayload.embeds[0].description, /^Fetched: 2026-08-10 08:15 ICT CPU benchmark digest/);
+  assert.match(result.digestPayload.embeds[0].description, /Hardware: CPU • \*\*AMD Ryzen 9 7950X\*\*/);
+  assert.match(result.digestPayload.embeds[0].description, /Total hashrate \(all benchmark threads\): 249,389\.00 H\/s/);
+  assert.match(result.digestPayload.embeds[0].description, /Single-thread hashrate \(one thread\): 487\.09 H\/s/);
+  assert.doesNotMatch(result.digestPayload.embeds[0].description, /Electricity|Revenue|Profit/);
+  assert.deepEqual(result.nextState.devices[XMRIG_CPU.key].lastBenchmark, result.benchmark);
+});
+
+test('groups GPU and CPU results into one readable Discord message', () => {
+  const gpu = run(GPU, page([coinRow({ ticker: 'AAA', net: 0.50 })]));
+  const secondGpu = core.normalizeHardwareEntry({
+    name: 'NVIDIA RTX 2070',
+    url: 'https://hashrate.no/gpus/2070',
+  });
+  const secondGpuResult = run(secondGpu, page([coinRow({ ticker: 'BBB', net: 0.40 })], secondGpu));
+  const cpu = run(XMRIG_CPU, xmrigBody([xmrigRow()]));
+  const grouped = core.buildGroupedDiscordPayload([gpu, secondGpuResult, cpu], '2026-08-10T01:15:00.000Z', RATE);
+
+  assert.equal(grouped.embeds.length, 2);
+  assert.match(grouped.embeds[0].title, /^Fetched: 2026-08-10 08:15 ICT profitable coins digest — GPUs$/);
+  assert.equal(grouped.embeds[0].fields[0].name, GPU.name);
+  assert.match(grouped.embeds[0].fields[0].value, /Hashrate: 10 Mh\/s • Power: 100 W/);
+  assert.match(grouped.embeds[0].fields[0].value, /Net profit: \$0\.50\/day/);
+  assert.match(grouped.embeds[0].fields[0].value, /Hashrate efficiency:/);
+  assert.match(grouped.embeds[0].fields[0].value, /Profit efficiency:/);
+  assert.match(grouped.embeds[0].fields[0].value, /────────────────────$/);
+  assert.doesNotMatch(grouped.embeds[0].fields.at(-1).value, /────────────────────$/);
+  assert.equal(grouped.embeds[1].fields[0].name, XMRIG_CPU.name);
+  assert.match(grouped.embeds[1].fields[0].value, /Total hashrate \(all benchmark threads\): 249,389\.00 H\/s/);
+  assert.match(grouped.embeds[1].fields[0].value, /Single-thread hashrate \(one thread\): 487\.09 H\/s/);
+  assert.equal((JSON.stringify(grouped).match(/\*\*/g) || []).length, 4);
+});
+
+test('rejects malformed and unusable XMRig benchmark responses', () => {
+  assert.equal(core.parseXmrigSource('{', XMRIG_CPU).reason, 'invalid_json');
+  assert.equal(core.parseXmrigSource('{}', XMRIG_CPU).reason, 'response_not_array');
+  const invalid = core.parseXmrigSource(xmrigBody([
+    xmrigRow({ cpu: { brand: 'Other CPU' } }),
+    xmrigRow({ algo: 'rx/wow' }),
+    xmrigRow({ hashrate_1t: 0 }),
+  ]), XMRIG_CPU);
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.reason, 'no_valid_benchmark');
+  assert.ok(invalid.rejected.includes('wrong_cpu'));
+  assert.ok(invalid.rejected.includes('unsupported_algorithm'));
+  assert.ok(invalid.rejected.includes('invalid_hashrate'));
 });
 
 test('does not gate daily digests on the old $1.25 threshold', () => {

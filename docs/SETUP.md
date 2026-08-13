@@ -51,12 +51,21 @@ Edit `config/hardware.json`. Add one object per device:
     {
       "name": "AMD Ryzen 9 7900X",
       "url": "https://www.hashrate.no/cpus/7900x/"
+    },
+    {
+      "name": "AMD Ryzen 9 7950X",
+      "url": "https://xmrig.com/benchmark?cpu=AMD+Ryzen+9+7950X"
     }
   ]
 }
 ```
 
-Use the hardware name shown in the Hashrate.no page title. URLs must be HTTPS Hashrate.no pages using `/gpus/<slug>/` or `/cpus/<slug>/`.
+The platform is inferred from the URL; do not add a `platform` or `type` field.
+
+- Hashrate.no names must match the hardware page title. Use `https://www.hashrate.no/gpus/<slug>/` or `https://www.hashrate.no/cpus/<slug>/`.
+- XMRig names must match the `cpu` query value. The validator treats `®` as `(R)` and `™` as `(TM)`. Use `https://xmrig.com/benchmark?cpu=<encoded CPU name>`.
+
+XMRig uses the official `rx/0` benchmark API and reports total and single-thread hashrate. It does not produce electricity, revenue, or profit values.
 
 Validate the file before starting n8n:
 
@@ -64,7 +73,7 @@ Validate the file before starting n8n:
 node scripts/validate-hardware-config.js
 ```
 
-The workflow creates one independent digest per successfully parsed device. If one device fails, the other devices continue.
+The workflow creates one independent result per configured device, then combines successful devices into one Discord message with separate GPU and CPU sections. If one device fails, the other devices continue.
 
 ## 3. Validate and start n8n
 
@@ -104,7 +113,7 @@ The schedule runs every day at `00:00` in the `Asia/Ho_Chi_Minh` timezone.
 1. Open the imported workflow.
 2. Select **Execute Workflow**.
 3. Confirm each configured device reaches its digest stage without errors.
-4. Confirm one Discord message appears per successful device.
+4. Confirm one organized Discord message appears with a separate entry for each successful device.
 
 If a device has no valid rows, its failure is recorded in persistent state and no fake Discord digest is sent for that device.
 

@@ -16,6 +16,21 @@ function normalizeWhitespace(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+function canonicalHardwareName(value) {
+  return normalizeWhitespace(value)
+    .replace(/®/g, '(R)')
+    .replace(/™/g, '(TM)')
+    .toLowerCase();
+}
+
+function decodeUrlComponent(value) {
+  try {
+    return decodeURIComponent(String(value).replace(/\+/g, ' '));
+  } catch {
+    return null;
+  }
+}
+
 function decodeEntities(value) {
   return String(value ?? '')
     .replace(/&nbsp;/gi, ' ')
@@ -178,7 +193,39 @@ function parseHardwareUrl(value) {
   const raw = String(value ?? '').trim();
   const protocol = raw.match(/^([a-z][a-z\d+.-]*):\/\//i)?.[1]?.toLowerCase();
   if (protocol !== 'https') return { ok: false, reason: 'url_must_use_https' };
-  const host = raw.match(/^https:\/\/([^/?#]+)/i)?.[1]?.toLowerCase();
+  const parts = raw.match(/^https:\/\/([^/?#]+)(\/[^?#]*)?(?:\?([^#]*))?(?:#([\s\S]*))?$/i);
+  if (!parts) return { ok: false, reason: 'invalid_url' };
+  const authority = parts[1];
+  if (authority.includes('@') || authority.includes(':') || parts[4] !== undefined) {
+    return { ok: false, reason: 'invalid_url' };
+  }
+  const host = authority.toLowerCase();
+
+  if (['xmrig.com', 'www.xmrig.com'].includes(host)) {
+    if (!/^\/benchmark\/?$/i.test(parts[2] || '/')) {
+      return { ok: false, reason: 'url_path_must_be_xmrig_benchmark' };
+    }
+    const query = parts[3] || '';
+    const parameters = query ? query.split('&').map((pair) => pair.split('=')) : [];
+    if (parameters.length !== 1 || parameters[0].length !== 2 || decodeUrlComponent(parameters[0][0]) !== 'cpu') {
+      return { ok: false, reason: 'xmrig_url_must_have_one_cpu_query' };
+    }
+    const decodedCpu = decodeUrlComponent(parameters[0][1]);
+    if (decodedCpu === null) return { ok: false, reason: 'invalid_url' };
+    const cpu = normalizeWhitespace(decodedCpu);
+    if (!cpu) return { ok: false, reason: 'xmrig_cpu_query_is_required' };
+    const encodedCpu = encodeURIComponent(cpu);
+    return {
+      ok: true,
+      platform: 'xmrig',
+      type: 'cpu',
+      slug: cpu.toLowerCase(),
+      cpu,
+      url: `https://xmrig.com/benchmark?cpu=${encodedCpu}`,
+      fetchUrl: `https://api.xmrig.com/1/benchmarks?algo=${encodeURIComponent('rx/0')}&cpu=${encodedCpu}`,
+    };
+  }
+
   if (!['hashrate.no', 'www.hashrate.no'].includes(host)) {
     return { ok: false, reason: 'url_host_must_be_hashrate_no' };
   }
@@ -189,9 +236,11 @@ function parseHardwareUrl(value) {
   const slug = match[2].toLowerCase();
   return {
     ok: true,
+    platform: 'hashrate-no',
     type,
     slug,
     url: `https://${host}/${match[1].toLowerCase()}/${slug}/`,
+    fetchUrl: `https://${host}/${match[1].toLowerCase()}/${slug}/`,
   };
 }
 
@@ -200,12 +249,17 @@ function normalizeHardwareEntry(entry) {
   const name = normalizeWhitespace(entry.name);
   const parsedUrl = parseHardwareUrl(entry.url);
   if (!name || !parsedUrl.ok) return null;
+  if (parsedUrl.platform === 'xmrig' && canonicalHardwareName(name) !== canonicalHardwareName(parsedUrl.cpu)) return null;
   return {
     name,
     url: parsedUrl.url,
+    fetchUrl: parsedUrl.fetchUrl,
+    platform: parsedUrl.platform,
     type: parsedUrl.type,
     slug: parsedUrl.slug,
-    key: `${parsedUrl.type}:${parsedUrl.slug}`,
+    key: parsedUrl.platform === 'hashrate-no'
+      ? `${parsedUrl.type}:${parsedUrl.slug}`
+      : `${parsedUrl.platform}:${parsedUrl.type}:${parsedUrl.slug}`,
   };
 }
 
@@ -223,8 +277,14 @@ function validateHardwareConfig(value) {
     const normalized = normalizeHardwareEntry(entry);
     if (!normalized) {
       const name = normalizeWhitespace(entry?.name) || `entry ${index + 1}`;
-      const urlReason = parseHardwareUrl(entry?.url).reason;
-      errors.push(`${name}: ${urlReason === 'invalid_url' ? 'invalid url' : 'name and url are required'}`);
+      const parsedUrl = parseHardwareUrl(entry?.url);
+      if (!normalizeWhitespace(entry?.name) || !String(entry?.url ?? '').trim()) {
+        errors.push(`${name}: name and url are required`);
+      } else if (parsedUrl.ok && parsedUrl.platform === 'xmrig') {
+        errors.push(`${name}: XMRig CPU name must match the cpu query in url`);
+      } else {
+        errors.push(`${name}: ${parsedUrl.reason === 'invalid_url' ? 'invalid url' : 'name and url are required'}`);
+      }
       continue;
     }
     const nameKey = normalized.name.toLowerCase();
@@ -264,6 +324,77 @@ function exactHardwareMarker(html, hardware) {
     metaTitle,
     reason: !titleTag ? 'missing_title' : !expectedName ? 'missing_hardware_name' : !expectedTitle ? 'wrong_hardware_title' : !expectedMeta ? 'wrong_hardware_meta_title' : '',
   };
+}
+
+function parseXmrigSource(body, hardware) {
+  if (typeof body !== 'string' || !body.trim()) {
+    return { ok: false, reason: 'empty_source', rows: [], rejected: [] };
+  }
+  const normalizedHardware = normalizeHardwareEntry(hardware);
+  if (!normalizedHardware || normalizedHardware.platform !== 'xmrig') {
+    return { ok: false, reason: 'invalid_hardware', rows: [], rejected: [] };
+  }
+
+  let rows;
+  try {
+    rows = JSON.parse(body);
+  } catch (error) {
+    return { ok: false, reason: 'invalid_json', rows: [], rejected: [error.message] };
+  }
+  if (!Array.isArray(rows)) {
+    return { ok: false, reason: 'response_not_array', rows: [], rejected: [] };
+  }
+
+  const rejected = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      rejected.push('invalid_row');
+      continue;
+    }
+    if (Number(row.status) !== 3) {
+      rejected.push('invalid_status');
+      continue;
+    }
+    if (row.threads_ok === false || String(row.threads_ok).toLowerCase() === 'false') {
+      rejected.push('threads_not_validated');
+      continue;
+    }
+    if (normalizeWhitespace(row.algo).toLowerCase() !== 'rx/0') {
+      rejected.push('unsupported_algorithm');
+      continue;
+    }
+    if (canonicalHardwareName(row.cpu?.brand) !== canonicalHardwareName(normalizedHardware.name)) {
+      rejected.push('wrong_cpu');
+      continue;
+    }
+    const hashrate = parseNumber(row.hashrate);
+    const hashrate1t = parseNumber(row.hashrate_1t);
+    if (hashrate === null || hashrate <= 0 || hashrate1t === null || hashrate1t <= 0) {
+      rejected.push('invalid_hashrate');
+      continue;
+    }
+    return {
+      ok: true,
+      reason: '',
+      rows,
+      rejected,
+      benchmark: {
+        id: normalizeWhitespace(row.id),
+        algorithm: normalizeWhitespace(row.algo),
+        totalHashrate: hashrate,
+        singleThreadHashrate: hashrate1t,
+        size: Number.isFinite(Number(row.size)) ? Number(row.size) : null,
+        duration: Number.isFinite(Number(row.duration)) ? Number(row.duration) : null,
+        threads: Number.isFinite(Number(row.threads)) ? Number(row.threads) : null,
+        version: normalizeWhitespace(row.version),
+        os: normalizeWhitespace(row.os),
+        doneAt: Number.isFinite(Number(row.done_ts)) ? Number(row.done_ts) : null,
+        source: normalizedHardware.fetchUrl,
+      },
+    };
+  }
+
+  return { ok: false, reason: 'no_valid_benchmark', rows, rejected };
 }
 
 function stableKey(ticker, algorithm) {
@@ -320,6 +451,7 @@ function parseSource(html, hardware = DEFAULT_HARDWARE) {
   }
   const normalizedHardware = normalizeHardwareEntry(hardware);
   if (!normalizedHardware) return { ok: false, reason: 'invalid_hardware', rows: [], rejected: [] };
+  if (normalizedHardware.platform === 'xmrig') return parseXmrigSource(html, normalizedHardware);
   const marker = exactHardwareMarker(html, normalizedHardware);
   if (!marker.ok) return { ok: false, reason: marker.reason, rows: [], rejected: [] };
 
@@ -396,6 +528,10 @@ function deduplicateCoins(coins) {
 }
 
 function calculateSourceCoins(html, electricityRate, source, fetchedAt, previousValues = {}, hardware = DEFAULT_HARDWARE) {
+  const normalizedHardware = normalizeHardwareEntry(hardware);
+  if (normalizedHardware?.platform === 'xmrig') {
+    return { ok: false, reason: 'xmrig_not_profitability_source', rows: [], rejected: [], coins: [], suspiciousCount: 0 };
+  }
   const parsed = parseSource(html, hardware);
   if (!parsed.ok) return { ...parsed, coins: [], suspiciousCount: 0 };
   if (!Number.isFinite(electricityRate) || electricityRate < 0 || electricityRate > MAX_ELECTRICITY_PRICE_PER_KWH) {
@@ -468,6 +604,7 @@ function createDeviceState(hardware = null) {
     lastSuccessfulFetchedAt: null,
     previousValues: {},
     previousRank: [],
+    lastBenchmark: null,
     lastDiscord: null,
     lastError: null,
   };
@@ -482,6 +619,7 @@ function normalizeDeviceState(value, hardware = null) {
     hardware: hardwareSummary(hardware) || source.hardware || null,
     previousValues: source.previousValues && typeof source.previousValues === 'object' ? source.previousValues : {},
     previousRank: Array.isArray(source.previousRank) ? source.previousRank : [],
+    lastBenchmark: source.lastBenchmark && typeof source.lastBenchmark === 'object' ? source.lastBenchmark : null,
   };
 }
 
@@ -555,11 +693,50 @@ function failedDeviceRun(state, hardware, timestamp, reason, rejected = []) {
   };
 }
 
+function processXmrigRun({ hardware, html, state, fetchedAt }) {
+  const normalizedHardware = normalizeHardwareEntry(hardware);
+  const timestamp = validTimestamp(fetchedAt) || new Date().toISOString();
+  const currentState = normalizeState(state, normalizedHardware ? [normalizedHardware] : []);
+  if (!normalizedHardware || normalizedHardware.platform !== 'xmrig') {
+    return failedDeviceRun(currentState, hardware, timestamp, 'invalid_hardware');
+  }
+
+  const parsed = parseXmrigSource(html, normalizedHardware);
+  if (!parsed.ok) return failedDeviceRun(currentState, normalizedHardware, timestamp, parsed.reason, parsed.rejected);
+
+  const currentDevice = currentState.devices[normalizedHardware.key] || createDeviceState(normalizedHardware);
+  const device = {
+    ...currentDevice,
+    hardware: normalizedHardware,
+    lastFetchedAt: timestamp,
+    lastSuccessfulFetchedAt: timestamp,
+    lastBenchmark: parsed.benchmark,
+    lastError: null,
+  };
+  const nextState = replaceDevice(currentState, normalizedHardware.key, device);
+  return {
+    ok: true,
+    sourceStatus: 'ok',
+    hardware: normalizedHardware,
+    hardwareKey: normalizedHardware.key,
+    coins: [],
+    ranked: [],
+    rawLeader: null,
+    benchmark: parsed.benchmark,
+    digestPayload: buildXmrigDiscordPayload(parsed.benchmark, normalizedHardware, timestamp),
+    nextState,
+    rejected: parsed.rejected,
+  };
+}
+
 function processDeviceRun({ hardware, html, state, electricityRate, fetchedAt = new Date().toISOString() }) {
   const normalizedHardware = normalizeHardwareEntry(hardware);
   const timestamp = validTimestamp(fetchedAt) || new Date().toISOString();
   const currentState = normalizeState(state, normalizedHardware ? [normalizedHardware] : []);
   if (!normalizedHardware) return failedDeviceRun(currentState, hardware, timestamp, 'invalid_hardware');
+  if (normalizedHardware.platform === 'xmrig') {
+    return processXmrigRun({ hardware: normalizedHardware, html, state: currentState, fetchedAt: timestamp });
+  }
   if (!Number.isFinite(electricityRate) || electricityRate < 0 || electricityRate > MAX_ELECTRICITY_PRICE_PER_KWH) {
     return failedDeviceRun(currentState, normalizedHardware, timestamp, 'invalid_electricity_rate');
   }
@@ -641,6 +818,32 @@ function formatIct(timestamp) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ICT`;
 }
 
+function formatHps(value) {
+  return `${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} H/s`;
+}
+
+function buildXmrigDiscordPayload(benchmark, hardware, fetchedAt) {
+  const algorithm = benchmark.algorithm === 'rx/0' ? 'RandomX (rx/0)' : benchmark.algorithm;
+  const threadText = Number.isFinite(benchmark.threads) ? `, ${benchmark.threads} threads` : '';
+  return {
+    embeds: [{
+      description: [
+        `Fetched: ${formatIct(fetchedAt)} CPU benchmark digest`,
+        `Hardware: CPU • **${hardware.name}**`,
+        `Benchmark: ${algorithm}${threadText}`,
+        '',
+        'HASHRATE',
+        `Total hashrate (all benchmark threads): ${formatHps(benchmark.totalHashrate)}`,
+        `Single-thread hashrate (one thread): ${formatHps(benchmark.singleThreadHashrate)}`,
+      ].join('\n'),
+      url: hardware.url,
+      color: 0x5865f2,
+      footer: { text: 'Source: XMRig' },
+    }],
+    allowed_mentions: { parse: [] },
+  };
+}
+
 function coinBlock(coin, electricityRate) {
   const hashrateEfficiency = Number.isFinite(coin.hashratePerWatt) && coin.hashratePerWattUnit
     ? `${coin.hashratePerWatt.toFixed(3)} ${coin.hashratePerWattUnit}`
@@ -669,6 +872,82 @@ function coinBlock(coin, electricityRate) {
     `Net profit (24h, after electricity): ${formatUsd(coin.netProfit)}`,
     `Efficiency (net profit per kWh): ${formatUsd(coin.profitPerKwh)}/kWh`,
   ].join('\n');
+}
+
+function compactCoinBlock(coin) {
+  const hashrateEfficiency = Number.isFinite(coin.hashratePerWatt) && coin.hashratePerWattUnit
+    ? `${coin.hashratePerWatt.toFixed(3)} ${coin.hashratePerWattUnit}`
+    : 'Unavailable';
+  const profitEfficiency = Number.isFinite(coin.profitPerKwh)
+    ? `${formatUsd(coin.profitPerKwh)}/kWh`
+    : 'Unavailable';
+  return [
+    `**${coin.rank}. ${coin.coin}** (${coin.ticker}) • ${coin.algorithm}`,
+    `Hashrate: ${coin.hashrate} • Power: ${coin.powerW} W`,
+    `Revenue: ${formatUsd(coin.revenue24h)}/day • Electricity: ${formatUsd(coin.electricityCostPerDay)}/day • Net profit: ${formatUsd(coin.netProfit)}/day`,
+    `Hashrate efficiency: ${hashrateEfficiency} • Profit efficiency: ${profitEfficiency}`,
+  ].join('\n');
+}
+
+function buildGroupedDiscordPayload(results, fetchedAt, electricityRate) {
+  const deviceSeparator = '────────────────────';
+  const successful = (Array.isArray(results) ? results : []).filter((result) => (
+    result?.ok && result.hardware && (
+      result.hardware.platform === 'xmrig' ? result.benchmark : result.ranked?.length
+    )
+  ));
+  const embeds = [];
+  const gpuResults = successful.filter((result) => result.hardware.platform !== 'xmrig');
+  const cpuResults = successful.filter((result) => result.hardware.platform === 'xmrig');
+
+  if (gpuResults.length) {
+    embeds.push({
+      title: `Fetched: ${formatIct(fetchedAt)} profitable coins digest — GPUs`,
+      description: [
+        `Electricity rate: ${formatUsd(electricityRate)}/kWh`,
+        'Each coin shows hashrate, power, revenue, electricity cost, net profit, and both efficiency measures.',
+      ].join('\n'),
+      fields: gpuResults.map((result, index) => ({
+        name: result.hardware.name,
+        value: [
+          result.ranked.slice(0, 3).map(compactCoinBlock).join('\n\n'),
+          index < gpuResults.length - 1 ? deviceSeparator : null,
+        ].filter(Boolean).join('\n\n'),
+        inline: false,
+      })),
+      color: 0x5865f2,
+      footer: { text: 'Source: Hashrate.no' },
+    });
+  }
+
+  if (cpuResults.length) {
+    embeds.push({
+      title: `Fetched: ${formatIct(fetchedAt)} CPU benchmark digest`,
+      description: 'Total hashrate uses all benchmark threads; single-thread hashrate uses one thread.',
+      fields: cpuResults.map((result, index) => {
+        const benchmark = result.benchmark;
+        const algorithm = benchmark.algorithm === 'rx/0' ? 'RandomX (rx/0)' : benchmark.algorithm;
+        const threadText = Number.isFinite(benchmark.threads) ? ` • Threads: ${benchmark.threads}` : '';
+        return {
+          name: result.hardware.name,
+          value: [
+            `Total hashrate (all benchmark threads): ${formatHps(benchmark.totalHashrate)}`,
+            `Single-thread hashrate (one thread): ${formatHps(benchmark.singleThreadHashrate)}`,
+            `Algorithm: ${algorithm}${threadText}`,
+            index < cpuResults.length - 1 ? deviceSeparator : null,
+          ].filter(Boolean).join('\n'),
+          inline: false,
+        };
+      }),
+      color: 0x5865f2,
+      footer: { text: 'Source: XMRig' },
+    });
+  }
+
+  return {
+    embeds,
+    allowed_mentions: { parse: [] },
+  };
 }
 
 function buildDiscordPayload(rankedResult, hardware, electricityRate, fetchedAt) {
@@ -703,13 +982,16 @@ const api = {
   MAX_REVENUE_24H_USD,
   MAX_ELECTRICITY_PRICE_PER_KWH,
   normalizeWhitespace,
+  canonicalHardwareName,
   parseHashrate,
   calculateHashrateEfficiency,
   parseHardwareUrl,
+  decodeUrlComponent,
   normalizeHardwareEntry,
   validateHardwareConfig,
   parseHardwareConfigText,
   exactHardwareMarker,
+  parseXmrigSource,
   parseSource,
   calculateSourceCoins,
   calculateCoin,
@@ -721,9 +1003,13 @@ const api = {
   createInitialState,
   normalizeState,
   processDeviceRun,
+  processXmrigRun,
   completeDiscord,
   formatIct,
+  formatHps,
+  buildXmrigDiscordPayload,
   buildDiscordPayload,
+  buildGroupedDiscordPayload,
 };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = api;

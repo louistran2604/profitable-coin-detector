@@ -1,0 +1,32 @@
+{
+  "config/hardware.json": {
+    "mtime": 1786617605.2983663,
+    "ast_hash": "215abf0813a12b24d9c500017aa86575",
+    "semantic_hash": "215abf0813a12b24d9c500017aa86575"
+  },
+  "scripts/build-workflow.js": {
+    "mtime": 1786614874.2087495,
+    "ast_hash": "8f679b578933a3467f6dbd5edc372e85",
+    "semantic_hash": "8f679b578933a3467f6dbd5edc372e85"
+  },
+  "scripts/validate-hardware-config.js": {
+    "mtime": 1786553229.935916,
+    "ast_hash": "200baf018b2ddc18ff8a3071454ac9ef",
+    "semantic_hash": "200baf018b2ddc18ff8a3071454ac9ef"
+  },
+  "src/coin-detector-core.js": {
+    "mtime": 1786618408.078265,
+    "ast_hash": "e4bc7c6b3465df356dd06d65e44b6592",
+    "semantic_hash": "e4bc7c6b3465df356dd06d65e44b6592"
+  },
+  "tests/coin-detector-core.test.js": {
+    "mtime": 1786618401.9690607,
+    "ast_hash": "2eb0c342540bf31d2c10ece7da8b4e33",
+    "semantic_hash": "2eb0c342540bf31d2c10ece7da8b4e33"
+  },
+  "workflows/coin-profitability-detector.json": {
+    "mtime": 1786618411.421377,
+    "ast_hash": "6f1f20ab4255d44462a6861efe59b5aa",
+    "semantic_hash": "6f1f20ab4255d44462a6861efe59b5aa"
+  }
+}

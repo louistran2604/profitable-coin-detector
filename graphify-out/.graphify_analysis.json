@@ -1,0 +1,187 @@
+{
+  "communities": {
+    "0": [
+      "src_coin_detector_core",
+      "src_coin_detector_core_api",
+      "src_coin_detector_core_builddiscordpayload",
+      "src_coin_detector_core_buildxmrigdiscordpayload",
+      "src_coin_detector_core_calculatecoin",
+      "src_coin_detector_core_calculatehashrateefficiency",
+      "src_coin_detector_core_calculatesourcecoins",
+      "src_coin_detector_core_coinblock",
+      "src_coin_detector_core_createinitialstate",
+      "src_coin_detector_core_decodeurlcomponent",
+      "src_coin_detector_core_deduplicatecoins",
+      "src_coin_detector_core_default_hardware",
+      "src_coin_detector_core_extractdirectlistitems",
+      "src_coin_detector_core_formathps",
+      "src_coin_detector_core_formatict",
+      "src_coin_detector_core_formatusd",
+      "src_coin_detector_core_rankcoins",
+      "src_coin_detector_core_stablekey",
+      "src_coin_detector_core_suspiciousspike"
+    ],
+    "1": [
+      "tests_coin_detector_core_test",
+      "tests_coin_detector_core_test_assert",
+      "tests_coin_detector_core_test_coinrow",
+      "tests_coin_detector_core_test_core",
+      "tests_coin_detector_core_test_cpu",
+      "tests_coin_detector_core_test_fs",
+      "tests_coin_detector_core_test_page",
+      "tests_coin_detector_core_test_revenuefornet",
+      "tests_coin_detector_core_test_row",
+      "tests_coin_detector_core_test_run",
+      "tests_coin_detector_core_test_test",
+      "tests_coin_detector_core_test_xmrig_cpu",
+      "tests_coin_detector_core_test_xmrigbody",
+      "tests_coin_detector_core_test_xmrigrow"
+    ],
+    "2": [
+      "src_coin_detector_core_canonicalhardwarename",
+      "src_coin_detector_core_exacthardwaremarker",
+      "src_coin_detector_core_extractfirsttag",
+      "src_coin_detector_core_normalizehardwareentry",
+      "src_coin_detector_core_normalizewhitespace",
+      "src_coin_detector_core_parsehardwareconfigtext",
+      "src_coin_detector_core_parsehardwareurl",
+      "src_coin_detector_core_parsehashrate",
+      "src_coin_detector_core_parsenumber",
+      "src_coin_detector_core_parsesource",
+      "src_coin_detector_core_parsexmrigsource",
+      "src_coin_detector_core_validatehardwareconfig"
+    ],
+    "3": [
+      "src_coin_detector_core_completediscord",
+      "src_coin_detector_core_createdevicestate",
+      "src_coin_detector_core_faileddevicerun",
+      "src_coin_detector_core_hardwaresummary",
+      "src_coin_detector_core_normalizedevicestate",
+      "src_coin_detector_core_normalizestate",
+      "src_coin_detector_core_parsercollapse",
+      "src_coin_detector_core_processdevicerun",
+      "src_coin_detector_core_processxmrigrun",
+      "src_coin_detector_core_replacedevice",
+      "src_coin_detector_core_validtimestamp"
+    ],
+    "4": [
+      "src_coin_detector_core_classhastoken",
+      "src_coin_detector_core_decodeentities",
+      "src_coin_detector_core_elementswithclass",
+      "src_coin_detector_core_escaperegexp",
+      "src_coin_detector_core_extractadjacentvalue",
+      "src_coin_detector_core_extractattribute",
+      "src_coin_detector_core_extractdatavalue",
+      "src_coin_detector_core_firstelementtext",
+      "src_coin_detector_core_parserow",
+      "src_coin_detector_core_striptags"
+    ],
+    "5": [
+      "scripts_build_workflow",
+      "scripts_build_workflow_coresource",
+      "scripts_build_workflow_embeddedcore",
+      "scripts_build_workflow_fs",
+      "scripts_build_workflow_path",
+      "scripts_build_workflow_root",
+      "scripts_build_workflow_workflow",
+      "scripts_build_workflow_workflowpath"
+    ],
+    "6": [
+      "scripts_validate_hardware_config",
+      "scripts_validate_hardware_config_configpath",
+      "scripts_validate_hardware_config_core",
+      "scripts_validate_hardware_config_fs",
+      "scripts_validate_hardware_config_path",
+      "scripts_validate_hardware_config_validation"
+    ]
+  },
+  "cohesion": {
+    "0": 0.17543859649122806,
+    "1": 0.16483516483516483,
+    "2": 0.30303030303030304,
+    "3": 0.4,
+    "4": 0.3111111111111111,
+    "5": 0.25,
+    "6": 0.3333333333333333
+  },
+  "gods": [
+    {
+      "id": "src_coin_detector_core_normalizehardwareentry",
+      "label": "normalizeHardwareEntry()",
+      "degree": 12
+    },
+    {
+      "id": "src_coin_detector_core_processdevicerun",
+      "label": "processDeviceRun()",
+      "degree": 12
+    },
+    {
+      "id": "src_coin_detector_core_normalizewhitespace",
+      "label": "normalizeWhitespace()",
+      "degree": 11
+    },
+    {
+      "id": "src_coin_detector_core_processxmrigrun",
+      "label": "processXmrigRun()",
+      "degree": 10
+    },
+    {
+      "id": "src_coin_detector_core_parserow",
+      "label": "parseRow()",
+      "degree": 9
+    },
+    {
+      "id": "src_coin_detector_core_parsexmrigsource",
+      "label": "parseXmrigSource()",
+      "degree": 8
+    },
+    {
+      "id": "src_coin_detector_core_calculatesourcecoins",
+      "label": "calculateSourceCoins()",
+      "degree": 8
+    },
+    {
+      "id": "src_coin_detector_core_striptags",
+      "label": "stripTags()",
+      "degree": 7
+    },
+    {
+      "id": "src_coin_detector_core_parsesource",
+      "label": "parseSource()",
+      "degree": 7
+    },
+    {
+      "id": "src_coin_detector_core_exacthardwaremarker",
+      "label": "exactHardwareMarker()",
+      "degree": 6
+    }
+  ],
+  "surprises": [
+    {
+      "source": "parseXmrigSource()",
+      "target": "row()",
+      "source_files": [
+        "src/coin-detector-core.js",
+        "tests/coin-detector-core.test.js"
+      ],
+      "confidence": "INFERRED",
+      "relation": "indirect_call",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
+    },
+    {
+      "source": "calculateSourceCoins()",
+      "target": "row()",
+      "source_files": [
+        "src/coin-detector-core.js",
+        "tests/coin-detector-core.test.js"
+      ],
+      "confidence": "INFERRED",
+      "relation": "indirect_call",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
+    }
+  ],
+  "tokens": {
+    "input": 0,
+    "output": 0
+  }
+}

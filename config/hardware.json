@@ -19,6 +19,22 @@
     {
       "name": "NVIDIA CMP 30HX",
       "url": "https://hashrate.no/gpus/cmp30"
+    },
+    {
+      "name": "Intel® Pentium® CPU G2030 @ 3.00GHz",
+      "url": "https://xmrig.com/benchmark?cpu=Intel%28R%29+Pentium%28R%29+CPU+G2030+%40+3.00GHz"
+    },
+    {
+      "name": "12th Gen Intel® Core™ i3-12100",
+      "url": "https://xmrig.com/benchmark?cpu=12th+Gen+Intel%28R%29+Core%28TM%29+i3-12100"
+    },
+    {
+      "name": "Intel® Core™ i5-3570 CPU @ 3.40GHz",
+      "url": "https://xmrig.com/benchmark?cpu=Intel%28R%29+Core%28TM%29+i5-3570+CPU+%40+3.40GHz"
+    },
+    {
+      "name": "Intel® Xeon® CPU X5650 @ 2.67GHz",
+      "url": "https://xmrig.com/benchmark?cpu=Intel%28R%29+Xeon%28R%29+CPU+X5650+%40+2.67GHz"
     }
   ]
 }

@@ -45,6 +45,8 @@ docker compose ps n8n-coin-detector
 
 The workflow reads the mounted file at the start of every run, so it does not need to be re-imported or restarted for a JSON-only change.
 
+The platform is inferred from each URL. Hashrate.no entries use `/gpus/<slug>/` or `/cpus/<slug>/`; XMRig entries use `https://xmrig.com/benchmark?cpu=<encoded CPU name>`. The XMRig `cpu` query must match the configured `name`; `®`/`™` are accepted as equivalents of XMRig's `(R)`/`(TM)` notation.
+
 ## Update workflow code in the existing n8n workflow
 
 Use this procedure after changing `src/coin-detector-core.js` or `scripts/build-workflow.js`. It replaces the existing workflow instead of creating a duplicate.
@@ -149,4 +151,4 @@ docker compose -f compose.yml config --quiet
 node -e "JSON.parse(require('fs').readFileSync('workflows/coin-profitability-detector.json', 'utf8')); console.log('Workflow JSON is valid')"
 ```
 
-Persistent detector state is stored at `/home/node/.n8n/coin-detector-state.json` inside the `n8n-coin-detector-data` volume. It contains a `devices` map keyed by hardware type and Hashrate.no slug, including the last good snapshot and last Discord result for each device.
+Persistent detector state is stored at `/home/node/.n8n/coin-detector-state.json` inside the `n8n-coin-detector-data` volume. It contains a `devices` map keyed by the normalized hardware source. Each device stores its last good snapshot and Discord result; XMRig devices also store `lastBenchmark` with the selected total and single-thread hashrates.

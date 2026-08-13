@@ -1,15 +1,16 @@
 # n8n Coin Profitability Detector
 
-A Dockerized [n8n](https://n8n.io/) workflow that checks [Hashrate.no](https://hashrate.no/) once per day, ranks mining opportunities for configured hardware, and sends one concise Discord digest per successful device.
+A Dockerized [n8n](https://n8n.io/) workflow that checks configured mining hardware once per day and sends one organized Discord digest containing every successful device.
 
 ## Features
 
-- Supports multiple Hashrate.no GPU and CPU pages.
+- Supports multiple Hashrate.no GPU/CPU pages and XMRig CPU benchmark pages.
 - Hardware is configured in [`config/hardware.json`](config/hardware.json) with a readable name and page URL.
-- Makes one Hashrate.no GET request per configured device per daily run, with one limited retry after a failure.
+- Makes one source GET request per configured device per daily run, with one limited retry after a failure.
 - Separates revenue, electricity cost, and net profit.
 - Prefers lower-power opportunities when net profit is reasonably close.
-- Sends a digest every day for each successfully parsed device. There is no `$1.25/day` alert gate.
+- Reports XMRig total and single-thread RandomX hashrate without inventing profitability data.
+- Sends one organized Discord message every day with separate GPU and CPU sections. There is no `$1.25/day` alert gate.
 - Continues processing other devices when one page fails.
 - Persists per-device snapshots and Discord delivery status in Docker storage.
 - Keeps Discord credentials in `.env`, which is ignored by Git.
@@ -40,12 +41,22 @@ Edit [`config/hardware.json`](config/hardware.json):
     {
       "name": "AMD Ryzen 9 7900X",
       "url": "https://www.hashrate.no/cpus/7900x/"
+    },
+    {
+      "name": "AMD Ryzen 9 7950X",
+      "url": "https://xmrig.com/benchmark?cpu=AMD+Ryzen+9+7950X"
     }
   ]
 }
 ```
 
-The name must match the hardware name shown by the Hashrate.no page. Only HTTPS URLs on `hashrate.no` using `/gpus/<slug>/` or `/cpus/<slug>/` are accepted.
+The platform is inferred from the URL hostname; do not add a `platform` or `type` field. Hashrate.no names must match the page title. XMRig names must match the `cpu` query value; the validator treats `®` as `(R)` and `™` as `(TM)` because XMRig commonly uses the ASCII forms. Use HTTPS URLs in one of these forms:
+
+- `https://www.hashrate.no/gpus/<slug>/`
+- `https://www.hashrate.no/cpus/<slug>/`
+- `https://xmrig.com/benchmark?cpu=<encoded CPU name>`
+
+XMRig results use the official `rx/0` benchmark API and show total plus single-thread hashrate. They do not show electricity, revenue, or profit because XMRig does not provide those values.
 
 Validate the file:
 
@@ -62,20 +73,20 @@ Daily 00:00 ICT
       ↓
 Load config/hardware.json
       ↓
-Fetch one page per device
+Fetch one source per device
       ↓
 Validate and normalize each response
       ↓
-Calculate net profit and efficiency
+Calculate profitability for Hashrate.no or parse XMRig hashrate
       ↓
 Rank each device independently
       ↓
-Post one Discord digest per successful device
+Group successful devices into one Discord digest
       ↓
 Save per-device state
 ```
 
-If one device fails, its error is stored and its last good snapshot is preserved. Other configured devices can still produce Discord digests.
+If one device fails, its error is stored and its last good snapshot is preserved. Other configured devices can still appear in the grouped Discord digest.
 
 ## Electricity and ranking
 
@@ -107,7 +118,7 @@ Backup and restore commands are in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ## Data source and limits
 
-No Hashrate.no API key is required. The workflow uses the structured HTML estimate pages directly and validates the configured hardware title before parsing rows. Mining estimates change with coin prices, network difficulty, pool conditions, and miner software; the digest is informational.
+No API key is required. Hashrate.no uses its structured HTML estimate pages directly and recalculates electricity cost from the configured rate. XMRig uses its official [benchmark API](https://xmrig.com/docs/api/1/benchmark), which powers the benchmark page. Mining estimates and benchmark submissions can change over time; the digest is informational.
 
 ## Repository structure
 

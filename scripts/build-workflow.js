@@ -101,6 +101,7 @@ for (let index = 0; index < inputItems.length; index += 1) {
   output.push({
     json: {
       ...result,
+      fetchedAt,
       fetchStatusCode,
       discordConfigured,
       shouldPostDiscord: Boolean(result.ok && discordConfigured),
@@ -112,6 +113,26 @@ for (let index = 0; index < inputItems.length; index += 1) {
 
 writeState(state);
 return output;
+`;
+
+const groupCode = `
+${embeddedCore()}
+
+const items = $input.all().map((item) => item.json).filter((item) => (
+  item.ok && item.hardware && item.digestPayload
+));
+if (!items.length) return [];
+
+const fetchedAt = items.find((item) => item.fetchedAt)?.fetchedAt || new Date().toISOString();
+const electricityRate = Number($env.ELECTRICITY_PRICE_PER_KWH);
+return [{
+  json: {
+    hardwareKeys: items.map((item) => item.hardwareKey).filter(Boolean),
+    hardwareCount: items.length,
+    digestPayload: core.buildGroupedDiscordPayload(items, fetchedAt, electricityRate),
+  },
+  pairedItem: { item: 0 },
+}];
 `;
 
 const finalizeCode = `
@@ -137,7 +158,7 @@ function writeState(state) {
   fs.renameSync(temporaryPath, STATE_PATH);
 }
 
-const stagedItems = $('Stage digests').all();
+const groupedItems = $('Group Discord digests').all();
 const responseItems = $input.all();
 let state = readState();
 const output = [];
@@ -145,20 +166,22 @@ const output = [];
 for (let index = 0; index < responseItems.length; index += 1) {
   const responseItem = responseItems[index];
   const paired = responseItem.pairedItem;
-  const stageIndex = Number.isInteger(paired) ? paired : Number.isInteger(paired?.item) ? paired.item : index;
-  const staged = stagedItems[stageIndex]?.json || {};
+  const groupIndex = Number.isInteger(paired) ? paired : Number.isInteger(paired?.item) ? paired.item : index;
+  const grouped = groupedItems[groupIndex]?.json || {};
   const response = responseItem.json || {};
   const statusCode = Number(response.statusCode ?? response.status ?? 204);
   const succeeded = !response.error && statusCode >= 200 && statusCode < 300;
-  state = core.completeDiscord(state, staged.hardwareKey, {
-    success: succeeded,
-    sentAt: new Date().toISOString(),
-    statusCode,
-    error: response.error || response.message || 'HTTP ' + statusCode,
-  });
+  for (const hardwareKey of grouped.hardwareKeys || []) {
+    state = core.completeDiscord(state, hardwareKey, {
+      success: succeeded,
+      sentAt: new Date().toISOString(),
+      statusCode,
+      error: response.error || response.message || 'HTTP ' + statusCode,
+    });
+  }
   output.push({
     json: {
-      ...staged,
+      ...grouped,
       discordSucceeded: succeeded,
       discordStatusCode: statusCode,
       statePath: STATE_PATH,
@@ -205,7 +228,7 @@ const workflow = {
     {
       parameters: {
         method: 'GET',
-        url: '={{ $json.hardware.url }}',
+        url: '={{ $json.hardware.fetchUrl }}',
         options: {
           timeout: 15000,
           response: { response: { responseFormat: 'text', fullResponse: true } },
@@ -263,6 +286,14 @@ const workflow = {
       position: [1020, 0],
     },
     {
+      parameters: { mode: 'runOnceForAllItems', jsCode: groupCode },
+      id: 'e4f5a6b7-c8d9-4e0f-a1b2-3c4d5e6f7a80',
+      name: 'Group Discord digests',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: [1280, -80],
+    },
+    {
       parameters: {
         method: 'POST',
         url: '={{ $env.DISCORD_WEBHOOK_URL }}',
@@ -271,6 +302,12 @@ const workflow = {
         jsonBody: '={{ JSON.stringify($json.digestPayload) }}',
         options: {
           timeout: 10000,
+          batching: {
+            batch: {
+              batchSize: 1,
+              batchInterval: 1000,
+            },
+          },
           response: { response: { responseFormat: 'text', fullResponse: true } },
         },
         responseFormat: 'text',
@@ -279,7 +316,7 @@ const workflow = {
       name: 'Post Discord digests',
       type: 'n8n-nodes-base.httpRequest',
       typeVersion: 4.2,
-      position: [1280, -80],
+      position: [1540, -80],
       onError: 'continueRegularOutput',
     },
     {
@@ -288,7 +325,7 @@ const workflow = {
       name: 'Finalize Discord state',
       type: 'n8n-nodes-base.code',
       typeVersion: 2,
-      position: [1540, -80],
+      position: [1800, -80],
     },
   ],
   connections: {
@@ -297,7 +334,8 @@ const workflow = {
     'Load hardware config': { main: [[{ node: 'Fetch hardware data', type: 'main', index: 0 }]] },
     'Fetch hardware data': { main: [[{ node: 'Stage digests', type: 'main', index: 0 }]] },
     'Stage digests': { main: [[{ node: 'Should post Discord digest?', type: 'main', index: 0 }]] },
-    'Should post Discord digest?': { main: [[{ node: 'Post Discord digests', type: 'main', index: 0 }], []] },
+    'Should post Discord digest?': { main: [[{ node: 'Group Discord digests', type: 'main', index: 0 }], []] },
+    'Group Discord digests': { main: [[{ node: 'Post Discord digests', type: 'main', index: 0 }]] },
     'Post Discord digests': { main: [[{ node: 'Finalize Discord state', type: 'main', index: 0 }]] },
   },
   active: false,
