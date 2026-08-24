@@ -6,14 +6,35 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const coreSource = fs.readFileSync(path.join(root, 'src', 'coin-detector-core.js'), 'utf8');
 const workflowPath = path.join(root, 'workflows', 'coin-profitability-detector.json');
+const firstFunction = coreSource.indexOf('\nfunction ');
+const corePrefix = coreSource.slice(0, firstFunction).trim();
 
-function embeddedCore() {
-  return `const core = (() => {\n${coreSource}\nreturn api;\n})();`;
+function coreFunction(name) {
+  const start = coreSource.indexOf(`function ${name}(`);
+  if (start < 0) throw new Error(`Missing core function: ${name}`);
+  const nextFunction = coreSource.indexOf('\nfunction ', start + 1);
+  const apiStart = coreSource.indexOf('\nconst api =', start);
+  const end = [nextFunction, apiStart].filter((index) => index >= 0).sort((a, b) => a - b)[0] || coreSource.length;
+  return coreSource.slice(start, end).trim();
+}
+
+function embeddedCore(functions, exports = functions) {
+  if (!functions) return `const core = (() => {\n${coreSource}\nreturn api;\n})();`;
+  const selected = functions.map(coreFunction).join('\n\n');
+  const api = exports.map((name) => `  ${name},`).join('\n');
+  return `const core = (() => {\n${corePrefix}\n\n${selected}\n\nconst api = {\n${api}\n};\nreturn api;\n})();`;
 }
 
 const loadConfigCode = `
 const fs = require('fs');
-${embeddedCore()}
+${embeddedCore([
+  'normalizeWhitespace',
+  'canonicalHardwareName',
+  'parseHardwareUrl',
+  'normalizeHardwareEntry',
+  'validateHardwareConfig',
+  'parseHardwareConfigText',
+], ['parseHardwareConfigText'])}
 
 const CONFIG_PATH = '/home/node/config/hardware.json';
 const validation = core.parseHardwareConfigText(fs.readFileSync(CONFIG_PATH, 'utf8'));
@@ -82,7 +103,6 @@ for (let index = 0; index < inputItems.length; index += 1) {
       hardwareKey: null,
       ranked: [],
       rawLeader: null,
-      digestPayload: null,
       nextState: state,
       error: 'missing_hardware_link',
       rejected: [],
@@ -116,10 +136,16 @@ return output;
 `;
 
 const groupCode = `
-${embeddedCore()}
+${embeddedCore([
+  'formatUsd',
+  'formatIct',
+  'formatHps',
+  'compactCoinBlock',
+  'buildGroupedDiscordPayload',
+], ['buildGroupedDiscordPayload'])}
 
 const items = $input.all().map((item) => item.json).filter((item) => (
-  item.ok && item.hardware && item.digestPayload
+  item.ok && item.hardware
 ));
 if (!items.length) return [];
 
@@ -138,7 +164,20 @@ return [{
 const finalizeCode = `
 const fs = require('fs');
 const path = require('path');
-${embeddedCore()}
+${embeddedCore([
+  'normalizeWhitespace',
+  'canonicalHardwareName',
+  'parseHardwareUrl',
+  'normalizeHardwareEntry',
+  'hardwareSummary',
+  'createDeviceState',
+  'createInitialState',
+  'normalizeDeviceState',
+  'normalizeState',
+  'replaceDevice',
+  'validTimestamp',
+  'completeDiscord',
+], ['completeDiscord', 'createInitialState'])}
 
 const STATE_PATH = '/home/node/.n8n/coin-detector-state.json';
 

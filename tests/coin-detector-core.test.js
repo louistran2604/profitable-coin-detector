@@ -178,7 +178,7 @@ test('matches XMRig API trademark notation with the configured display name', ()
   assert.equal(parsed.ok, true);
 });
 
-test('creates an XMRig digest without profitability fields and persists its benchmark', () => {
+test('persists XMRig benchmark data for the grouped digest', () => {
   const result = core.processDeviceRun({
     hardware: XMRIG_CPU,
     html: xmrigBody([xmrigRow()]),
@@ -188,11 +188,11 @@ test('creates an XMRig digest without profitability fields and persists its benc
   });
   assert.equal(result.ok, true);
   assert.equal(result.hardware.platform, 'xmrig');
-  assert.match(result.digestPayload.embeds[0].description, /^Fetched: 2026-08-10 08:15 ICT CPU benchmark digest/);
-  assert.match(result.digestPayload.embeds[0].description, /Hardware: CPU • \*\*AMD Ryzen 9 7950X\*\*/);
-  assert.match(result.digestPayload.embeds[0].description, /Total hashrate \(all benchmark threads\): 249,389\.00 H\/s/);
-  assert.match(result.digestPayload.embeds[0].description, /Single-thread hashrate \(one thread\): 487\.09 H\/s/);
-  assert.doesNotMatch(result.digestPayload.embeds[0].description, /Electricity|Revenue|Profit/);
+  assert.equal(result.digestPayload, undefined);
+  const grouped = core.buildGroupedDiscordPayload([result], '2026-08-10T01:15:00.000Z', RATE);
+  assert.match(grouped.embeds[0].title, /^Fetched: 2026-08-10 08:15 ICT CPU benchmark digest/);
+  assert.match(grouped.embeds[0].fields[0].value, /Total hashrate \(all benchmark threads\): 249,389\.00 H\/s/);
+  assert.match(grouped.embeds[0].fields[0].value, /Single-thread hashrate \(one thread\): 487\.09 H\/s/);
   assert.deepEqual(result.nextState.devices[XMRIG_CPU.key].lastBenchmark, result.benchmark);
 });
 
@@ -240,7 +240,7 @@ test('does not gate daily digests on the old $1.25 threshold', () => {
   for (const net of [1.24, 1.25, 1.26]) {
     const result = run(GPU, page([coinRow({ ticker: `N${String(net).replace('.', '')}`, net })]));
     assert.equal(result.ok, true);
-    assert.ok(result.digestPayload);
+    assert.equal(core.buildGroupedDiscordPayload([result], '2026-08-10T01:15:00.000Z', RATE).embeds.length, 1);
   }
 });
 
@@ -266,26 +266,11 @@ test('sends a digest every successful day, including unchanged results', () => {
   const html = page([coinRow({ ticker: 'AAA', net: 0.50 })]);
   const first = run(GPU, html);
   assert.equal(first.ok, true);
-  assert.equal(first.digestPayload.content, undefined);
-  assert.equal(first.digestPayload.embeds.length, 1);
-  const embed = first.digestPayload.embeds[0];
-  assert.equal(embed.title, undefined);
-  assert.match(embed.description, /^Fetched: 2026-08-10 08:15 ICT profitable coins digest/);
-  assert.match(embed.description, /Hardware: GPU • \*\*NVIDIA RTX 5060 Ti 16GB\*\*/);
-  assert.match(embed.description, /Electricity rate: \$0\.10\/kWh/);
-  assert.match(embed.description, /1\. \*\*Alpha Coin\*\* \(AAA\) • AlgoA/);
-  assert.match(embed.description, /HASHRATE\nHashrate \(mining speed\): 10 Mh\/s/);
-  assert.match(embed.description, /Efficiency \(hashrate per watt\): 0\.100 MH\/s\/W/);
-  assert.match(embed.description, /POWER\nPower \(estimated draw\): 100 W/);
-  assert.match(embed.description, /Energy use \(24h\): 2\.40 kWh/);
-  assert.match(embed.description, /Electricity cost \(24h\): \$0\.24/);
-  assert.match(embed.description, /INCOME\nRevenue \(24h, before electricity\): \$0\.74/);
-  assert.match(embed.description, /Revenue efficiency \(24h revenue per kWh\): \$0\.31\/kWh/);
-  assert.match(embed.description, /Net profit \(24h, after electricity\): \$0\.50/);
-  assert.match(embed.description, /Efficiency \(net profit per kWh\): \$0\.21\/kWh/);
-  assert.equal((embed.description.match(/\*\*/g) || []).length, 4);
-  assert.equal((JSON.stringify(first.digestPayload).match(/\*\*/g) || []).length, 4);
-  assert.doesNotMatch(JSON.stringify(first.digestPayload), /Events:/);
+  assert.equal(first.digestPayload, undefined);
+  const firstGrouped = core.buildGroupedDiscordPayload([first], '2026-08-10T01:15:00.000Z', RATE);
+  assert.equal(firstGrouped.embeds.length, 1);
+  assert.match(firstGrouped.embeds[0].title, /^Fetched: 2026-08-10 08:15 ICT profitable coins digest — GPUs$/);
+  assert.match(firstGrouped.embeds[0].fields[0].value, /Net profit: \$0\.50\/day/);
 
   const sent = core.completeDiscord(first.nextState, GPU.key, {
     success: true,
@@ -294,7 +279,8 @@ test('sends a digest every successful day, including unchanged results', () => {
   });
   const unchanged = run(GPU, html, sent, '2026-08-11T01:15:00.000Z');
   assert.equal(unchanged.ok, true);
-  assert.ok(unchanged.digestPayload);
+  assert.equal(unchanged.digestPayload, undefined);
+  assert.equal(core.buildGroupedDiscordPayload([unchanged], '2026-08-11T01:15:00.000Z', RATE).embeds.length, 1);
   assert.deepEqual(unchanged.ranked.map((coin) => coin.key), first.ranked.map((coin) => coin.key));
 });
 
@@ -304,22 +290,25 @@ test('keeps GPU and CPU state separate and isolates a failed device', () => {
   const gpuFirst = run(GPU, gpuHtml);
   const cpuFirst = run(CPU, cpuHtml, gpuFirst.nextState);
   assert.equal(cpuFirst.ok, true);
-  assert.match(gpuFirst.digestPayload.embeds[0].description, /Hardware: GPU • \*\*NVIDIA RTX 5060 Ti 16GB\*\*/);
-  assert.match(cpuFirst.digestPayload.embeds[0].description, /Hardware: CPU • \*\*AMD Ryzen 9 7900X\*\*/);
-  assert.notEqual(gpuFirst.digestPayload.embeds[0].description, cpuFirst.digestPayload.embeds[0].description);
+  assert.equal(gpuFirst.digestPayload, undefined);
+  assert.equal(cpuFirst.digestPayload, undefined);
+  const grouped = core.buildGroupedDiscordPayload([gpuFirst, cpuFirst], '2026-08-10T01:15:00.000Z', RATE);
+  assert.equal(grouped.embeds.length, 1);
+  assert.equal(grouped.embeds[0].fields.length, 2);
+  assert.notEqual(grouped.embeds[0].fields[0].name, grouped.embeds[0].fields[1].name);
   assert.deepEqual(Object.keys(cpuFirst.nextState.devices).sort(), ['cpu:7900x', 'gpu:5060ti']);
 
   const gpuFailure = run(GPU, '', cpuFirst.nextState, '2026-08-11T01:15:00.000Z');
   assert.equal(gpuFailure.ok, false);
   assert.equal(gpuFailure.sourceStatus, 'empty_source');
-  assert.equal(gpuFailure.digestPayload, null);
-  assert.deepEqual(gpuFailure.nextState.devices[GPU.key].previousRank, cpuFirst.nextState.devices[GPU.key].previousRank);
+  assert.equal(gpuFailure.digestPayload, undefined);
+  assert.deepEqual(gpuFailure.nextState.devices[GPU.key].previousValues, cpuFirst.nextState.devices[GPU.key].previousValues);
   assert.equal(gpuFailure.nextState.devices[GPU.key].lastSuccessfulFetchedAt, cpuFirst.nextState.devices[GPU.key].lastSuccessfulFetchedAt);
   assert.equal(gpuFailure.nextState.devices[GPU.key].lastError.reason, 'empty_source');
 
   const cpuSecond = run(CPU, cpuHtml, gpuFailure.nextState, '2026-08-11T01:15:01.000Z');
   assert.equal(cpuSecond.ok, true);
-  assert.ok(cpuSecond.digestPayload);
+  assert.equal(cpuSecond.digestPayload, undefined);
   assert.equal(cpuSecond.nextState.devices[GPU.key].lastError.reason, 'empty_source');
   assert.equal(cpuSecond.nextState.devices[CPU.key].lastError, null);
 });
@@ -341,14 +330,13 @@ test('records Discord delivery status for only the selected hardware', () => {
 test('migrates legacy single-device state into the configured device map', () => {
   const legacy = {
     previousValues: { 'AAA|algoa': { ticker: 'AAA', algorithm: 'AlgoA', revenue24h: 1 } },
-    previousRank: ['AAA|algoa'],
     lastFetchedAt: '2026-08-10T01:15:00.000Z',
     lastSuccessfulFetchedAt: '2026-08-10T01:15:00.000Z',
   };
   const normalized = core.normalizeState(legacy, [GPU, CPU]);
   assert.equal(normalized.version, 2);
   assert.deepEqual(Object.keys(normalized.devices), [GPU.key]);
-  assert.deepEqual(normalized.devices[GPU.key].previousRank, ['AAA|algoa']);
+  assert.deepEqual(normalized.devices[GPU.key].previousValues, legacy.previousValues);
 });
 
 test('rejects malformed, empty, missing, and suspicious source data', () => {
@@ -392,7 +380,7 @@ test('preserves the last good snapshot on parser collapse', () => {
   const next = run(GPU, page([coinRow({ ticker: 'A', net: 0.50 })]), initial.nextState, '2026-08-11T01:15:00.000Z');
   assert.equal(next.ok, false);
   assert.equal(next.sourceStatus, 'parser_collapse');
-  assert.deepEqual(next.nextState.devices[GPU.key].previousRank, initial.nextState.devices[GPU.key].previousRank);
+  assert.deepEqual(next.nextState.devices[GPU.key].previousValues, initial.nextState.devices[GPU.key].previousValues);
   assert.equal(next.nextState.devices[GPU.key].lastSuccessfulFetchedAt, initial.nextState.devices[GPU.key].lastSuccessfulFetchedAt);
 });
 
@@ -406,7 +394,7 @@ test('fails closed for invalid electricity rates', () => {
   });
   assert.equal(result.ok, false);
   assert.equal(result.sourceStatus, 'invalid_electricity_rate');
-  assert.equal(result.digestPayload, null);
+  assert.equal(result.digestPayload, undefined);
 });
 
 test('only initializes missing state and fails closed for other state-read errors', () => {

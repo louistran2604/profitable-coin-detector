@@ -23,14 +23,6 @@ function canonicalHardwareName(value) {
     .toLowerCase();
 }
 
-function decodeUrlComponent(value) {
-  try {
-    return decodeURIComponent(String(value).replace(/\+/g, ' '));
-  } catch {
-    return null;
-  }
-}
-
 function decodeEntities(value) {
   return String(value ?? '')
     .replace(/&nbsp;/gi, ' ')
@@ -191,28 +183,27 @@ function extractDirectListItems(html) {
 
 function parseHardwareUrl(value) {
   const raw = String(value ?? '').trim();
-  const protocol = raw.match(/^([a-z][a-z\d+.-]*):\/\//i)?.[1]?.toLowerCase();
-  if (protocol !== 'https') return { ok: false, reason: 'url_must_use_https' };
-  const parts = raw.match(/^https:\/\/([^/?#]+)(\/[^?#]*)?(?:\?([^#]*))?(?:#([\s\S]*))?$/i);
-  if (!parts) return { ok: false, reason: 'invalid_url' };
-  const authority = parts[1];
-  if (authority.includes('@') || authority.includes(':') || parts[4] !== undefined) {
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
     return { ok: false, reason: 'invalid_url' };
   }
-  const host = authority.toLowerCase();
+  if (parsed.protocol !== 'https:') return { ok: false, reason: 'url_must_use_https' };
+  const authority = raw.match(/^https:\/\/([^/?#]+)/i)?.[1];
+  if (!authority || authority.includes('@') || authority.includes(':') || raw.includes('#')) {
+    return { ok: false, reason: 'invalid_url' };
+  }
+  const host = parsed.hostname.toLowerCase();
 
   if (['xmrig.com', 'www.xmrig.com'].includes(host)) {
-    if (!/^\/benchmark\/?$/i.test(parts[2] || '/')) {
+    if (!/^\/benchmark\/?$/i.test(parsed.pathname)) {
       return { ok: false, reason: 'url_path_must_be_xmrig_benchmark' };
     }
-    const query = parts[3] || '';
-    const parameters = query ? query.split('&').map((pair) => pair.split('=')) : [];
-    if (parameters.length !== 1 || parameters[0].length !== 2 || decodeUrlComponent(parameters[0][0]) !== 'cpu') {
+    if (parsed.searchParams.size !== 1 || !parsed.searchParams.has('cpu')) {
       return { ok: false, reason: 'xmrig_url_must_have_one_cpu_query' };
     }
-    const decodedCpu = decodeUrlComponent(parameters[0][1]);
-    if (decodedCpu === null) return { ok: false, reason: 'invalid_url' };
-    const cpu = normalizeWhitespace(decodedCpu);
+    const cpu = normalizeWhitespace(parsed.searchParams.get('cpu'));
     if (!cpu) return { ok: false, reason: 'xmrig_cpu_query_is_required' };
     const encodedCpu = encodeURIComponent(cpu);
     return {
@@ -229,8 +220,8 @@ function parseHardwareUrl(value) {
   if (!['hashrate.no', 'www.hashrate.no'].includes(host)) {
     return { ok: false, reason: 'url_host_must_be_hashrate_no' };
   }
-  if (/[?#]/.test(raw)) return { ok: false, reason: 'url_must_not_have_query_or_fragment' };
-  const match = raw.match(/^https:\/\/(?:hashrate\.no|www\.hashrate\.no)\/(gpus|cpus)\/([^/]+)\/?$/i);
+  if (parsed.search || raw.includes('?')) return { ok: false, reason: 'url_must_not_have_query_or_fragment' };
+  const match = parsed.pathname.match(/^\/(gpus|cpus)\/([^/]+)\/?$/i);
   if (!match) return { ok: false, reason: 'url_path_must_be_gpu_or_cpu_page' };
   const type = match[1].toLowerCase() === 'gpus' ? 'gpu' : 'cpu';
   const slug = match[2].toLowerCase();
@@ -491,25 +482,14 @@ function calculateCoin(raw, electricityRate, source, fetchedAt) {
     algorithm: raw.algorithm,
     hashrate: raw.hashrate,
     hashratePerWatt: hashrateEfficiency?.value ?? null,
-    hashrate_per_watt: hashrateEfficiency?.value ?? null,
     hashratePerWattUnit: hashrateEfficiency?.unit ?? null,
     powerW: raw.powerW,
-    power: raw.powerW,
     revenue24h: raw.revenue24h,
-    revenue_24h: raw.revenue24h,
-    revenue: raw.revenue24h,
     energyKwhPerDay,
-    energy_kwh_per_day: energyKwhPerDay,
-    energyKwh: energyKwhPerDay,
     electricityCostPerDay,
-    electricity_cost_per_day: electricityCostPerDay,
-    electricityCost: electricityCostPerDay,
     netProfit,
-    net_profit: netProfit,
     profitPerWatt,
-    profit_per_watt: profitPerWatt,
     profitPerKwh,
-    profit_per_kwh: profitPerKwh,
     source,
     fetchedAt,
     key: stableKey(raw.ticker, raw.algorithm),
@@ -603,7 +583,6 @@ function createDeviceState(hardware = null) {
     lastFetchedAt: null,
     lastSuccessfulFetchedAt: null,
     previousValues: {},
-    previousRank: [],
     lastBenchmark: null,
     lastDiscord: null,
     lastError: null,
@@ -615,11 +594,13 @@ function normalizeDeviceState(value, hardware = null) {
   const source = value && typeof value === 'object' ? value : {};
   return {
     ...initial,
-    ...source,
     hardware: hardwareSummary(hardware) || source.hardware || null,
+    lastFetchedAt: source.lastFetchedAt || null,
+    lastSuccessfulFetchedAt: source.lastSuccessfulFetchedAt || null,
     previousValues: source.previousValues && typeof source.previousValues === 'object' ? source.previousValues : {},
-    previousRank: Array.isArray(source.previousRank) ? source.previousRank : [],
     lastBenchmark: source.lastBenchmark && typeof source.lastBenchmark === 'object' ? source.lastBenchmark : null,
+    lastDiscord: source.lastDiscord || null,
+    lastError: source.lastError || null,
   };
 }
 
@@ -642,13 +623,12 @@ function normalizeState(state, hardwareList = []) {
   }
 
   const legacyHardware = configured.find((hardware) => hardware.key === DEFAULT_HARDWARE.key) || configured[0];
-  if (legacyHardware && (value.previousValues || value.previousRank || value.lastFetchedAt || value.lastSuccessfulFetchedAt)) {
+  if (legacyHardware && (value.previousValues || value.lastFetchedAt || value.lastSuccessfulFetchedAt)) {
     devices[legacyHardware.key] = normalizeDeviceState({
       hardware: legacyHardware,
       lastFetchedAt: value.lastFetchedAt || null,
       lastSuccessfulFetchedAt: value.lastSuccessfulFetchedAt || null,
       previousValues: value.previousValues || {},
-      previousRank: value.previousRank || [],
       lastError: value.lastError || null,
     }, legacyHardware);
   }
@@ -686,7 +666,6 @@ function failedDeviceRun(state, hardware, timestamp, reason, rejected = []) {
     hardwareKey,
     ranked: [],
     rawLeader: null,
-    digestPayload: null,
     nextState: replaceDevice(state, hardwareKey, device),
     error: reason,
     rejected,
@@ -723,7 +702,6 @@ function processXmrigRun({ hardware, html, state, fetchedAt }) {
     ranked: [],
     rawLeader: null,
     benchmark: parsed.benchmark,
-    digestPayload: buildXmrigDiscordPayload(parsed.benchmark, normalizedHardware, timestamp),
     nextState,
     rejected: parsed.rejected,
   };
@@ -763,7 +741,6 @@ function processDeviceRun({ hardware, html, state, electricityRate, fetchedAt = 
     lastFetchedAt: timestamp,
     lastSuccessfulFetchedAt: timestamp,
     previousValues: Object.fromEntries(rankedResult.ranked.map((coin) => [coin.key, coin])),
-    previousRank: rankedResult.ranked.map((coin) => coin.key),
     lastError: null,
   };
   const nextState = replaceDevice(currentState, normalizedHardware.key, device);
@@ -777,7 +754,6 @@ function processDeviceRun({ hardware, html, state, electricityRate, fetchedAt = 
     rawLeader: rankedResult.rawLeader,
     maxRawNetProfit: rankedResult.maxRawNetProfit,
     baselinePowerW: rankedResult.baselinePowerW,
-    digestPayload: buildDiscordPayload(rankedResult, normalizedHardware, electricityRate, timestamp),
     nextState,
     rejected: calculated.rejected,
   };
@@ -820,58 +796,6 @@ function formatIct(timestamp) {
 
 function formatHps(value) {
   return `${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} H/s`;
-}
-
-function buildXmrigDiscordPayload(benchmark, hardware, fetchedAt) {
-  const algorithm = benchmark.algorithm === 'rx/0' ? 'RandomX (rx/0)' : benchmark.algorithm;
-  const threadText = Number.isFinite(benchmark.threads) ? `, ${benchmark.threads} threads` : '';
-  return {
-    embeds: [{
-      description: [
-        `Fetched: ${formatIct(fetchedAt)} CPU benchmark digest`,
-        `Hardware: CPU • **${hardware.name}**`,
-        `Benchmark: ${algorithm}${threadText}`,
-        '',
-        'HASHRATE',
-        `Total hashrate (all benchmark threads): ${formatHps(benchmark.totalHashrate)}`,
-        `Single-thread hashrate (one thread): ${formatHps(benchmark.singleThreadHashrate)}`,
-      ].join('\n'),
-      url: hardware.url,
-      color: 0x5865f2,
-      footer: { text: 'Source: XMRig' },
-    }],
-    allowed_mentions: { parse: [] },
-  };
-}
-
-function coinBlock(coin, electricityRate) {
-  const hashrateEfficiency = Number.isFinite(coin.hashratePerWatt) && coin.hashratePerWattUnit
-    ? `${coin.hashratePerWatt.toFixed(3)} ${coin.hashratePerWattUnit}`
-    : 'Unavailable';
-  const energy24h = Number.isFinite(coin.energyKwhPerDay)
-    ? `${coin.energyKwhPerDay.toFixed(2)} kWh`
-    : 'Unavailable';
-  const revenuePerKwh = Number.isFinite(coin.energyKwhPerDay) && coin.energyKwhPerDay > 0
-    ? `${formatUsd(coin.revenue24h / coin.energyKwhPerDay)}/kWh`
-    : 'Unavailable';
-  return [
-    `${coin.rank}. **${coin.coin}** (${coin.ticker}) • ${coin.algorithm}`,
-    '',
-    'HASHRATE',
-    `Hashrate (mining speed): ${coin.hashrate}`,
-    `Efficiency (hashrate per watt): ${hashrateEfficiency}`,
-    '',
-    'POWER',
-    `Power (estimated draw): ${coin.powerW} W`,
-    `Energy use (24h): ${energy24h}`,
-    `Electricity cost (24h): ${formatUsd(coin.electricityCostPerDay)}`,
-    '',
-    'INCOME',
-    `Revenue (24h, before electricity): ${formatUsd(coin.revenue24h)}`,
-    `Revenue efficiency (24h revenue per kWh): ${revenuePerKwh}`,
-    `Net profit (24h, after electricity): ${formatUsd(coin.netProfit)}`,
-    `Efficiency (net profit per kWh): ${formatUsd(coin.profitPerKwh)}/kWh`,
-  ].join('\n');
 }
 
 function compactCoinBlock(coin) {
@@ -950,31 +874,6 @@ function buildGroupedDiscordPayload(results, fetchedAt, electricityRate) {
   };
 }
 
-function buildDiscordPayload(rankedResult, hardware, electricityRate, fetchedAt) {
-  const top = rankedResult.ranked.slice(0, 3);
-  const rawLeader = rankedResult.rawLeader;
-  const typeLabel = String(hardware.type || 'hardware').toUpperCase();
-  const blocks = top.map((coin) => coinBlock(coin, electricityRate));
-  if (rawLeader && (!top[0] || rawLeader.key !== top[0].key)) {
-    blocks.push(`Highest raw net profit: ${rawLeader.coin} (${rawLeader.ticker}/${rawLeader.algorithm}) — ${formatUsd(rawLeader.netProfit)} after electricity, using ${rawLeader.powerW} W`);
-  }
-  return {
-    embeds: [{
-      description: [
-        `Fetched: ${formatIct(fetchedAt)} profitable coins digest`,
-        `Hardware: ${typeLabel} • **${hardware.name}**`,
-        `Electricity rate: ${formatUsd(electricityRate)}/kWh`,
-        '',
-        blocks.join('\n\n'),
-      ].join('\n'),
-      url: hardware.url,
-      color: 0x5865f2,
-      footer: { text: 'Source: Hashrate.no' },
-    }],
-    allowed_mentions: { parse: [] },
-  };
-}
-
 const api = {
   DEFAULT_HARDWARE,
   ICT_TIMEZONE,
@@ -986,7 +885,6 @@ const api = {
   parseHashrate,
   calculateHashrateEfficiency,
   parseHardwareUrl,
-  decodeUrlComponent,
   normalizeHardwareEntry,
   validateHardwareConfig,
   parseHardwareConfigText,
@@ -1007,8 +905,6 @@ const api = {
   completeDiscord,
   formatIct,
   formatHps,
-  buildXmrigDiscordPayload,
-  buildDiscordPayload,
   buildGroupedDiscordPayload,
 };
 
