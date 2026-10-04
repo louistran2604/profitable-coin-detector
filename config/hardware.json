@@ -21,6 +21,10 @@
       "url": "https://hashrate.no/gpus/cmp30"
     },
     {
+      "name": "NVIDIA CMP 40HX",
+      "url": "https://hashrate.no/gpus/cmp40"
+    },
+    {
       "name": "Intel® Pentium® CPU G2030 @ 3.00GHz",
       "url": "https://xmrig.com/benchmark?cpu=Intel%28R%29+Pentium%28R%29+CPU+G2030+%40+3.00GHz"
     },
